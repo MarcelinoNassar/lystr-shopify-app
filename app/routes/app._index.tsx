@@ -92,7 +92,7 @@ export default function Index() {
       <div style={{ width: "min(100%, 760px)", display: "flex", flexDirection: "column", alignItems: "stretch", gap: "1rem" }}>
 
         <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-          <img src="/adknot-image.png" alt="Lystr" style={{ display: "block", width: "min(100%, 220px)", height: "auto" }}/>
+          <img src="/lystrIcon.png" alt="Lystr" style={{ display: "block", width: "min(100%, 220px)", height: "auto" }}/>
         </div>
 
         {isConnected ? (

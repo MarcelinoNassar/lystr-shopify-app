@@ -2,6 +2,7 @@
 
 client_id = "ae019124a78d280d0cd013bd03d022a2"
 name = "Lystr"
+handle= "lystr"
 application_url = "https://lystr.fly.dev"
 embedded = true
 
