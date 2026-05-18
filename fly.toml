@@ -1,0 +1,25 @@
+app = "lystr"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  HOST = "0.0.0.0"
+  SHOPIFY_APP_URL = "https://lystr.fly.dev"
+  SCOPES = "write_metaobject_definitions,write_metaobjects,write_products,read_products,read_locales,write_files,read_files,read_publications,write_publications"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

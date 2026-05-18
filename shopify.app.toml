@@ -1,0 +1,27 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "ae019124a78d280d0cd013bd03d022a2"
+name = "Lystr"
+application_url = "https://lystr.fly.dev"
+embedded = true
+
+[webhooks]
+api_version = "2026-01"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "/webhooks/compilance"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/app/uninstalled"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_metaobject_definitions,write_metaobjects,write_products,read_products,read_locales,write_files,read_files,read_publications,write_publications"
+
+[auth]
+redirect_urls = ["https://lystr.fly.dev/auth/callback"]
+
+[build]
+automatically_update_urls_on_dev = true
