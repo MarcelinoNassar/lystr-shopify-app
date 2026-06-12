@@ -1,5 +1,5 @@
 {
-  "name": "app-test-1",
+  "name": "lystr-shopify-app",
   "private": true,
   "scripts": {
     "build": "react-router build",

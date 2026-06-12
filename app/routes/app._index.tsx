@@ -3,7 +3,8 @@ import { Form, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
-import { Text } from "@shopify/polaris";
+
+const LYSTR_STORES_URL = "https://adon-ai-frontend.vercel.app/stores";
 
 type ActionData =
   | { error: string; success?: never }
@@ -89,6 +90,40 @@ export default function Index() {
 
   return (
     <div style={{ minHeight: "90vh", display: "flex", justifyContent: "center", alignItems: "flex-start", padding: "6vh 1rem 2rem" }}>
+      <style>
+        {`
+          @keyframes lystr-connected-pulse {
+            0% {
+              box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.38);
+              transform: scale(1);
+            }
+            70% {
+              box-shadow: 0 0 0 12px rgba(34, 197, 94, 0);
+              transform: scale(1.04);
+            }
+            100% {
+              box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+              transform: scale(1);
+            }
+          }
+
+          .lystr-connected-status {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+          }
+
+          .lystr-connected-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: lystr-connected-pulse 1.45s ease-out infinite;
+            flex: 0 0 auto;
+          }
+        `}
+      </style>
       <div style={{ width: "min(100%, 760px)", display: "flex", flexDirection: "column", alignItems: "stretch", gap: "1rem" }}>
 
         <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
@@ -96,8 +131,19 @@ export default function Index() {
         </div>
 
         {isConnected ? (
-          <div style={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
-            <Text as="p">Store connected successfully to Lystr-ai.</Text>
+          <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: "1rem" }}>
+            <div className="lystr-connected-status">
+              <span className="lystr-connected-dot" aria-hidden="true" />
+              <s-text>Store connected successfully to Lystr-ai.</s-text>
+            </div>
+            <s-button
+              href={LYSTR_STORES_URL}
+              target="_blank"
+              variant="primary"
+              icon="external"
+            >
+              Redirect
+            </s-button>
           </div>
         ) : (
 
