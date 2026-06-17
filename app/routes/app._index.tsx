@@ -4,7 +4,7 @@ import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
-const LYSTR_STORES_URL = "https://adon-ai-frontend.vercel.app/stores";
+const LYSTR_STORES_URL = "https://lystr.ai/stores";
 
 type ActionData =
   | { error: string; success?: never }
