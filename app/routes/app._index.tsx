@@ -89,7 +89,7 @@ export default function Index() {
   const isConnected = connected || actionData?.success === true;
 
   return (
-    <div style={{ minHeight: "90vh", display: "flex", justifyContent: "center", alignItems: "flex-start", padding: "6vh 1rem 2rem" }}>
+    <div style={{ flex: "1 1 auto", display: "flex", justifyContent: "center", alignItems: "flex-start", padding: "4vh 1rem 1rem", boxSizing: "border-box" }}>
       <style>
         {`
           @keyframes lystr-connected-pulse {
