@@ -127,14 +127,14 @@ export default function Index() {
       <div style={{ width: "min(100%, 760px)", display: "flex", flexDirection: "column", alignItems: "stretch", gap: "1rem" }}>
 
         <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-          <img src="/lystrIcon.png" alt="Lystr" style={{ display: "block", width: "min(100%, 220px)", height: "auto" }}/>
+          <img src="/lystrIcon.png" alt="Lystr Connect" style={{ display: "block", width: "min(100%, 220px)", height: "auto" }}/>
         </div>
 
         {isConnected ? (
           <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: "1rem" }}>
             <div className="lystr-connected-status">
               <span className="lystr-connected-dot" aria-hidden="true" />
-              <s-text>Store connected successfully to Lystr-ai.</s-text>
+              <s-text>Store connected successfully to Lystr Connect.</s-text>
             </div>
             <s-button
               href={LYSTR_STORES_URL}
