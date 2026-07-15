@@ -34,8 +34,15 @@ type PartnerSubscriptionItem = {
   } | null;
 };
 
+const FREE_PLAN_HANDLE = "free-plan";
+const PRO_PLAN_HANDLE = "pro-plan";
+const LEGACY_PRO_PLAN_HANDLE = "lystr-connector-monthly";
 const DEFAULT_APP_HANDLE = "lystr-connect";
-const DEFAULT_PLAN_HANDLES = ["lystr-connector-monthly", "pro-plan"];
+const DEFAULT_PLAN_HANDLES = [
+  FREE_PLAN_HANDLE,
+  PRO_PLAN_HANDLE,
+  LEGACY_PRO_PLAN_HANDLE,
+];
 const PARTNER_API_VERSION = "2026-07";
 
 function normalizeHandle(value: string | null | undefined) {
@@ -47,15 +54,29 @@ export function getShopifyAppHandle() {
 }
 
 export function getAppPricingPlanHandles() {
-  const raw =
-    process.env.SHOPIFY_APP_PRICING_PLAN_HANDLES ||
-    process.env.SHOPIFY_APP_PRICING_PLAN_HANDLE ||
-    DEFAULT_PLAN_HANDLES.join(",");
-
-  return raw
-    .split(",")
+  const handles = [
+    DEFAULT_PLAN_HANDLES.join(","),
+    process.env.SHOPIFY_APP_PRICING_PLAN_HANDLE,
+    process.env.SHOPIFY_APP_PRICING_PLAN_HANDLES,
+  ]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .flatMap((value) => value.split(","))
     .map(normalizeHandle)
     .filter(Boolean);
+
+  return Array.from(new Set(handles));
+}
+
+function isFreePlanHandle(planHandle: string | null | undefined) {
+  return normalizeHandle(planHandle) === FREE_PLAN_HANDLE;
+}
+
+function getPlanPrice(planHandle: string, config: LystrConnectorConfig) {
+  return isFreePlanHandle(planHandle) ? 0 : config.monthlyPrice;
+}
+
+function getPlanTrialDays(planHandle: string, config: LystrConnectorConfig) {
+  return isFreePlanHandle(planHandle) ? 0 : config.freeTrialDays;
 }
 
 export function isAcceptedAppPricingPlanHandle(planHandle: string | null | undefined) {
@@ -251,12 +272,14 @@ function subscriptionFromPlanHandle({
   shopDomain: string;
   startedAt?: string | null;
 }): ShopifySubscriptionForLystr {
+  const amount = getPlanPrice(planHandle, config);
+
   return {
     id: id || `shopify-app-pricing:${shopDomain}:${planHandle}`,
     name: planHandle,
     status: "ACTIVE",
     test: false,
-    trialDays: config.freeTrialDays,
+    trialDays: getPlanTrialDays(planHandle, config),
     createdAt: startedAt ?? null,
     currentPeriodEnd: currentPeriodEnd ?? null,
     lineItems: [
@@ -265,7 +288,7 @@ function subscriptionFromPlanHandle({
         plan: {
           pricingDetails: {
             price: {
-              amount: config.monthlyPrice,
+              amount,
               currencyCode: config.currency.toUpperCase(),
             },
           },
@@ -300,7 +323,7 @@ function subscriptionFromPartnerActiveSubscription({
     name: planHandle,
     status: subscription.cancelAtEndOfCycle ? "CANCELLED" : "ACTIVE",
     test: false,
-    trialDays: config.freeTrialDays,
+    trialDays: getPlanTrialDays(planHandle, config),
     createdAt: subscription.currentBillingCycle?.startTime ?? null,
     currentPeriodEnd: subscription.currentBillingCycle?.endTime ?? null,
     lineItems: [

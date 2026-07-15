@@ -24,6 +24,7 @@ export type LystrConnectorStatus = {
   monthlyPriceCents: number;
   nextBillingDate?: string | null;
   remainingTrialDays: number;
+  shopifyPlanHandle?: string | null;
   shopifySubscriptionId?: string | null;
   shopifySubscriptionStatus?: string | null;
   status: string;
