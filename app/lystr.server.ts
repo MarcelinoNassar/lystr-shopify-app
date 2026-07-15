@@ -14,6 +14,7 @@ export type LystrConnectorStatus = {
   accessAllowed: boolean;
   billingApprovalRequired: boolean;
   billingStatus?: string | null;
+  connectionPending?: boolean;
   creditsPerSuccessfulPayment: number;
   currency: string;
   grandfatheredBillingStartsAt?: string | null;
@@ -28,6 +29,8 @@ export type LystrConnectorStatus = {
   shopifySubscriptionId?: string | null;
   shopifySubscriptionStatus?: string | null;
   status: string;
+  storeId?: string | null;
+  storeName?: string | null;
   trialEndsAt: string | null;
   trialStartedAt: string | null;
 };
@@ -122,10 +125,23 @@ export async function prepareLystrStoreConnection(input: {
   });
 }
 
+export async function getLystrConnectorStatus(input: {
+  shopDomain: string;
+}) {
+  return requestLystr<{
+    connector: LystrConnectorStatus;
+  }>(
+    `/api/shopify-connector/status?shopDomain=${encodeURIComponent(
+      input.shopDomain
+    )}`
+  );
+}
+
 export async function connectLystrStore(input: {
   accessToken: string;
-  apiKey: string;
+  apiKey?: string;
   shopDomain: string;
+  shopifySubscription?: ShopifySubscriptionForLystr | null;
 }) {
   return requestLystr<{
     config: LystrConnectorConfig;

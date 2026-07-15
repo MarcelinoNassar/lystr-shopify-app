@@ -17,8 +17,8 @@ import styles from "../styles/app-index.module.css";
 import {
   connectLystrStore,
   getLystrConnectorConfig,
+  getLystrConnectorStatus,
   prepareLystrStoreConnection,
-  syncLystrConnectorBilling,
   type LystrConnectorStatus,
 } from "../lystr.server";
 import {
@@ -966,36 +966,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     where: { shopDomain: session.shop },
   });
   const configResponse = await getLystrConnectorConfig();
+  const statusResponse = await getLystrConnectorStatus({
+    shopDomain: session.shop,
+  }).catch((error) => {
+    console.warn("Failed to fetch Lystr connector status.", error);
+    return null;
+  });
   const activeSubscription = await getCurrentAppPricingSubscription({
     admin,
     config: configResponse.config,
     request,
     shopDomain: session.shop,
   });
-  let connector: LystrConnectorStatus | null = null;
+  let connector: LystrConnectorStatus | null =
+    statusResponse?.connector ?? null;
+  let connected = Boolean(store?.connected && store.accessToken && store.shopDomain);
 
-  if (store?.apiKey && session.accessToken) {
-    if (activeSubscription) {
-      const syncResult = await syncLystrConnectorBilling({
+  if (
+    session.accessToken &&
+    activeSubscription &&
+    (store?.apiKey || connector?.connectionPending || connector?.storeId)
+  ) {
+    try {
+      const connectResult = await connectLystrStore({
+        accessToken: session.accessToken,
+        apiKey: store?.apiKey ?? undefined,
         shopDomain: session.shop,
         shopifySubscription: activeSubscription,
       });
-      connector = syncResult.connector;
-
-      if (syncResult.connector.accessAllowed) {
-        await connectLystrStore({
-          accessToken: session.accessToken,
-          apiKey: store.apiKey,
-          shopDomain: session.shop,
-        });
-        await prisma.store.update({
-          where: { id: store.id },
-          data: {
-            accessToken: session.accessToken,
-            connected: true,
-          },
-        });
-      }
+      connector = connectResult.connector;
+      connected = Boolean(connectResult.connector.accessAllowed);
+    } catch (error) {
+      console.error("Failed to finalize Lystr connector store connection.", error);
     }
   }
 
@@ -1003,10 +1005,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     appPricingUrl: getAppPricingPlanSelectionUrl(session.shop),
     config: configResponse.config,
     connected: Boolean(
-      connector?.accessAllowed || (store?.connected && !connector),
+      connected ||
+        (store?.connected && !connector) ||
+        (connector?.accessAllowed &&
+          (connector.status === "GRANDFATHERED" ||
+            configResponse.config.monthlyPriceCents <= 0))
     ),
     connector,
-    hasPendingStore: Boolean(store?.apiKey),
+    hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),
     shopDomain: session.shop,
   };
 };
@@ -1055,14 +1061,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     apiKey,
     shopDomain: session.shop,
   });
-  const store = await prisma.store.update({
-    where: { id: prepared.store.id },
-    data: {
-      shopDomain: session.shop,
-      accessToken: session.accessToken,
-      connected: false,
-    },
-  });
   const activeSubscription = await getCurrentAppPricingSubscription({
     admin,
     config: prepared.config,
@@ -1071,23 +1069,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   if (activeSubscription || prepared.config.monthlyPriceCents <= 0) {
-    if (activeSubscription) {
-      await syncLystrConnectorBilling({
-        shopDomain: session.shop,
-        shopifySubscription: activeSubscription,
-      });
-    }
-
     await connectLystrStore({
       accessToken: session.accessToken,
       apiKey,
       shopDomain: session.shop,
-    });
-    await prisma.store.update({
-      where: { id: store.id },
-      data: {
-        connected: true,
-      },
+      shopifySubscription: activeSubscription,
     });
 
     return Response.json({ success: true } satisfies ActionData);
@@ -1098,12 +1084,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       accessToken: session.accessToken,
       apiKey,
       shopDomain: session.shop,
-    });
-    await prisma.store.update({
-      where: { id: store.id },
-      data: {
-        connected: true,
-      },
     });
 
     return Response.json({ success: true } satisfies ActionData);
