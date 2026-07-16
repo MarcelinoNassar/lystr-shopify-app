@@ -3,10 +3,7 @@ const LYSTR_CONNECTOR_SECRET_HEADER = "x-lystr-connector-secret";
 export type LystrConnectorConfig = {
   creditsPerSuccessfulPayment: number;
   currency: string;
-  freeTrialDays: number;
   migrationBillingStartsAt: string;
-  monthlyPrice: number;
-  monthlyPriceCents: number;
   planName: string;
 };
 
@@ -47,6 +44,7 @@ export type ShopifySubscriptionForLystr = {
   status?: string | null;
   test?: boolean | null;
   trialDays?: number | null;
+  trialEndsAt?: string | null;
   createdAt?: string | null;
   currentPeriodEnd?: string | null;
   lineItems?: {

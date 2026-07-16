@@ -22,6 +22,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       config: configResponse.config,
       request,
       shopDomain: shop,
+      throwOnPartnerApiError: true,
     });
 
     await syncLystrConnectorBilling({

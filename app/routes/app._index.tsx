@@ -673,14 +673,6 @@ function getConnectorMessage(status: string, remainingTrialDays: number) {
   }
 }
 
-function formatMoney(amount: number, currency: string) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: currency.toUpperCase(),
-    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
-  }).format(amount);
-}
-
 function CalendarIcon() {
   return (
     <svg
@@ -1007,9 +999,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     connected: Boolean(
       connected ||
         (store?.connected && !connector) ||
-        (connector?.accessAllowed &&
-          (connector.status === "GRANDFATHERED" ||
-            configResponse.config.monthlyPriceCents <= 0))
+        connector?.accessAllowed
     ),
     connector,
     hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),
@@ -1068,7 +1058,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     shopDomain: session.shop,
   });
 
-  if (activeSubscription || prepared.config.monthlyPriceCents <= 0) {
+  if (activeSubscription) {
     await connectLystrStore({
       accessToken: session.accessToken,
       apiKey,
@@ -1134,18 +1124,12 @@ export default function Index() {
     ) : (
       connectedStatusMessage
     );
-  const trialFeatureTitle =
-    config.freeTrialDays === 1
-      ? "1-day free trial"
-      : `${config.freeTrialDays}-day free trial`;
+  const trialFeatureTitle = "Shopify-managed trial";
   const creditFeatureTitle =
     config.creditsPerSuccessfulPayment === 1
       ? "1 Lystr credit"
       : `${config.creditsPerSuccessfulPayment} Lystr credits`;
-  const pricingFeatureTitle = `${formatMoney(
-    config.monthlyPrice,
-    config.currency,
-  )} every 30 days`;
+  const pricingFeatureTitle = "Shopify App Pricing";
 
   return (
     <div className={styles.page} style={criticalPageStyle}>

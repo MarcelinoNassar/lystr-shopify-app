@@ -71,14 +71,6 @@ function isFreePlanHandle(planHandle: string | null | undefined) {
   return normalizeHandle(planHandle) === FREE_PLAN_HANDLE;
 }
 
-function getPlanPrice(planHandle: string, config: LystrConnectorConfig) {
-  return isFreePlanHandle(planHandle) ? 0 : config.monthlyPrice;
-}
-
-function getPlanTrialDays(planHandle: string, config: LystrConnectorConfig) {
-  return isFreePlanHandle(planHandle) ? 0 : config.freeTrialDays;
-}
-
 export function isAcceptedAppPricingPlanHandle(planHandle: string | null | undefined) {
   const normalizedPlanHandle = normalizeHandle(planHandle);
 
@@ -251,8 +243,15 @@ function getLineItemPrice(
   const amount = Number(item?.price?.amount);
   const currency = item?.price?.currency?.trim().toUpperCase();
 
+  if (!Number.isFinite(amount) || amount < 0) {
+    return isFreePlanHandle(item?.handle) ? {
+      amount: 0,
+      currencyCode: currency || config.currency.toUpperCase(),
+    } : null;
+  }
+
   return {
-    amount: Number.isFinite(amount) && amount >= 0 ? amount : config.monthlyPrice,
+    amount,
     currencyCode: currency || config.currency.toUpperCase(),
   };
 }
@@ -272,14 +271,12 @@ function subscriptionFromPlanHandle({
   shopDomain: string;
   startedAt?: string | null;
 }): ShopifySubscriptionForLystr {
-  const amount = getPlanPrice(planHandle, config);
-
   return {
     id: id || `shopify-app-pricing:${shopDomain}:${planHandle}`,
     name: planHandle,
     status: "ACTIVE",
     test: false,
-    trialDays: getPlanTrialDays(planHandle, config),
+    trialDays: 0,
     createdAt: startedAt ?? null,
     currentPeriodEnd: currentPeriodEnd ?? null,
     lineItems: [
@@ -288,7 +285,7 @@ function subscriptionFromPlanHandle({
         plan: {
           pricingDetails: {
             price: {
-              amount,
+              amount: 0,
               currencyCode: config.currency.toUpperCase(),
             },
           },
@@ -316,6 +313,10 @@ function subscriptionFromPartnerActiveSubscription({
 
   const price = getLineItemPrice(item, config);
 
+  if (!price) {
+    return null;
+  }
+
   return {
     id:
       subscription.legacySubscriptionId ||
@@ -323,7 +324,8 @@ function subscriptionFromPartnerActiveSubscription({
     name: planHandle,
     status: subscription.cancelAtEndOfCycle ? "CANCELLED" : "ACTIVE",
     test: false,
-    trialDays: getPlanTrialDays(planHandle, config),
+    trialDays: 0,
+    trialEndsAt: subscription.trialEndsAt ?? null,
     createdAt: subscription.currentBillingCycle?.startTime ?? null,
     currentPeriodEnd: subscription.currentBillingCycle?.endTime ?? null,
     lineItems: [
@@ -344,15 +346,36 @@ export async function getCurrentAppPricingSubscription({
   config,
   request,
   shopDomain,
+  throwOnPartnerApiError = false,
 }: {
   admin: AdminGraphqlClient;
   config: LystrConnectorConfig;
   request: Request;
   shopDomain: string;
+  throwOnPartnerApiError?: boolean;
 }) {
   const redirectPlanHandle = getPlanHandleFromRequest(request);
 
-  if (redirectPlanHandle) {
+  try {
+    const partnerSubscription = await getPartnerActiveSubscription({ admin });
+    const activeSubscription = subscriptionFromPartnerActiveSubscription({
+      config,
+      shopDomain,
+      subscription: partnerSubscription,
+    });
+
+    if (activeSubscription) {
+      return activeSubscription;
+    }
+  } catch (error) {
+    console.warn("Failed to query Shopify App Pricing subscription.", error);
+
+    if (throwOnPartnerApiError) {
+      throw error;
+    }
+  }
+
+  if (redirectPlanHandle && isFreePlanHandle(redirectPlanHandle)) {
     return subscriptionFromPlanHandle({
       config,
       planHandle: redirectPlanHandle,
@@ -360,16 +383,5 @@ export async function getCurrentAppPricingSubscription({
     });
   }
 
-  try {
-    const partnerSubscription = await getPartnerActiveSubscription({ admin });
-
-    return subscriptionFromPartnerActiveSubscription({
-      config,
-      shopDomain,
-      subscription: partnerSubscription,
-    });
-  } catch (error) {
-    console.warn("Failed to query Shopify App Pricing subscription.", error);
-    return null;
-  }
+  return null;
 }
