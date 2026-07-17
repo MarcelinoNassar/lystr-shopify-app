@@ -20,6 +20,7 @@ import {
   getLystrConnectorStatus,
   prepareLystrStoreConnection,
   type LystrConnectorStatus,
+  type ShopifySubscriptionForLystr,
 } from "../lystr.server";
 import {
   getAppPricingPlanSelectionUrl,
@@ -158,6 +159,17 @@ const criticalWarningPulseStyle = {
   borderRadius: 999,
   background: "#f26a14",
   flex: "0 0 auto",
+} satisfies CSSProperties;
+
+const criticalCanceledStatusPillStyle = {
+  ...criticalStatusPillStyle,
+  background:
+    "linear-gradient(90deg, rgba(245, 158, 11, 0.13), rgba(217, 119, 6, 0.19))",
+} satisfies CSSProperties;
+
+const criticalCanceledStatusPillIconStyle = {
+  ...criticalStatusPillIconStyle,
+  color: "#d97706",
 } satisfies CSSProperties;
 
 const criticalRedirectButtonStyle = {
@@ -652,7 +664,78 @@ type ActionData =
   | { error: string; success?: never }
   | { success: true; error?: never };
 
-function getConnectorMessage(status: string) {
+function getErrorMessage(error: unknown) {
+  return error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : "Lystr could not connect this store right now.";
+}
+
+function isBillingApprovalRequiredMessage(message: string) {
+  return message.toLowerCase().includes("billing approval is required");
+}
+
+function hasRemainingSubscriptionAccess(
+  subscription: ShopifySubscriptionForLystr
+) {
+  if (!subscription.currentPeriodEnd) {
+    return false;
+  }
+
+  const currentPeriodEnd = new Date(subscription.currentPeriodEnd);
+
+  return (
+    !Number.isNaN(currentPeriodEnd.getTime()) &&
+    currentPeriodEnd.getTime() > Date.now()
+  );
+}
+
+function canUseCurrentShopifySubscription(
+  subscription: ShopifySubscriptionForLystr
+) {
+  const status = subscription.status?.trim().toUpperCase();
+
+  if (status === "CANCELED" || status === "CANCELLED") {
+    return hasRemainingSubscriptionAccess(subscription);
+  }
+
+  return status === "ACTIVE" || status === "ACCEPTED";
+}
+
+function formatConnectorDate(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    timeZone: "UTC",
+    dateStyle: "medium",
+  }).format(date);
+}
+
+function isConnectorCancellationPending(connector?: LystrConnectorStatus | null) {
+  return (
+    connector?.status?.toUpperCase() === "CANCELED" &&
+    connector.accessAllowed === true
+  );
+}
+
+function getConnectorMessage(connector: LystrConnectorStatus) {
+  const status = connector.status?.toUpperCase();
+
+  if (isConnectorCancellationPending(connector)) {
+    const accessEndsAt = formatConnectorDate(connector.nextBillingDate);
+
+    return accessEndsAt
+      ? `Subscription canceled. Access remains until ${accessEndsAt}.`
+      : "Subscription canceled. Access remains until the billing period ends.";
+  }
+
   switch (status) {
     case "ACTIVE":
       return "Active Shopify connector subscription.";
@@ -664,6 +747,10 @@ function getConnectorMessage(status: string) {
       return "Payment approval is required before connector access resumes.";
     case "UNINSTALLED":
       return "Connector was uninstalled from this shop.";
+    case "CANCELED":
+      return connector.billingApprovalRequired
+        ? "Approve Shopify billing to reconnect this store."
+        : "Connector subscription was canceled.";
     default:
       return "Shopify connector billing is not complete yet.";
   }
@@ -969,10 +1056,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let connector: LystrConnectorStatus | null =
     statusResponse?.connector ?? null;
   let connected = Boolean(store?.connected && store.accessToken && store.shopDomain);
+  const canFinalizeWithCurrentSubscription =
+    activeSubscription && canUseCurrentShopifySubscription(activeSubscription);
 
   if (
     session.accessToken &&
-    activeSubscription &&
+    canFinalizeWithCurrentSubscription &&
     (store?.apiKey || connector?.connectionPending || connector?.storeId)
   ) {
     try {
@@ -983,11 +1072,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shopifySubscription: activeSubscription,
       });
       connector = connectResult.connector;
-      connected = Boolean(connectResult.connector.accessAllowed);
+      connected = Boolean(
+        connectResult.connector.accessAllowed && connectResult.connector.storeId
+      );
     } catch (error) {
       console.error("Failed to finalize Lystr connector store connection.", error);
     }
   }
+
+  const connectorHasAttachedStore = Boolean(connector?.storeId);
 
   return {
     appPricingUrl: getAppPricingPlanSelectionUrl(session.shop),
@@ -995,7 +1088,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     connected: Boolean(
       connected ||
         (store?.connected && !connector) ||
-        connector?.accessAllowed
+        (connector?.accessAllowed && connectorHasAttachedStore)
     ),
     connector,
     hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),
@@ -1043,36 +1136,55 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const prepared = await prepareLystrStoreConnection({
-    apiKey,
-    shopDomain: session.shop,
-  });
-  const activeSubscription = await getCurrentAppPricingSubscription({
-    admin,
-    config: prepared.config,
-    request,
-    shopDomain: session.shop,
-  });
-
-  if (activeSubscription) {
-    await connectLystrStore({
-      accessToken: session.accessToken,
-      apiKey,
-      shopDomain: session.shop,
-      shopifySubscription: activeSubscription,
-    });
-
-    return Response.json({ success: true } satisfies ActionData);
-  }
-
-  if (prepared.connector.status === "GRANDFATHERED") {
-    await connectLystrStore({
-      accessToken: session.accessToken,
+  try {
+    const prepared = await prepareLystrStoreConnection({
       apiKey,
       shopDomain: session.shop,
     });
+    const activeSubscription = await getCurrentAppPricingSubscription({
+      admin,
+      config: prepared.config,
+      request,
+      shopDomain: session.shop,
+    });
+    const canConnectWithCurrentSubscription =
+      activeSubscription && canUseCurrentShopifySubscription(activeSubscription);
 
-    return Response.json({ success: true } satisfies ActionData);
+    if (canConnectWithCurrentSubscription) {
+      await connectLystrStore({
+        accessToken: session.accessToken,
+        apiKey,
+        shopDomain: session.shop,
+        shopifySubscription: activeSubscription,
+      });
+
+      return Response.json({ success: true } satisfies ActionData);
+    }
+
+    if (prepared.connector.status === "GRANDFATHERED") {
+      await connectLystrStore({
+        accessToken: session.accessToken,
+        apiKey,
+        shopDomain: session.shop,
+      });
+
+      return Response.json({ success: true } satisfies ActionData);
+    }
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+
+    if (isBillingApprovalRequiredMessage(errorMessage)) {
+      return redirect(getAppPricingPlanSelectionUrl(session.shop), {
+        target: "_top",
+      });
+    }
+
+    console.error("Failed to connect Lystr store from Shopify app.", error);
+
+    return Response.json(
+      { error: errorMessage } satisfies ActionData,
+      { status: 400 },
+    );
   }
 
   return redirect(getAppPricingPlanSelectionUrl(session.shop), {
@@ -1091,7 +1203,7 @@ export default function Index() {
 
   const status = connector?.status ?? (hasPendingStore ? "INCOMPLETE" : "");
   const statusMessage = connector
-    ? getConnectorMessage(connector.status)
+    ? getConnectorMessage(connector)
     : hasPendingStore
       ? "Approve Shopify billing to finish connecting this store."
       : "";
@@ -1106,6 +1218,7 @@ export default function Index() {
     connector?.accessAllowed !== true;
   const isConnected =
     !isBillingIncomplete && (connected || actionData?.success === true);
+  const isCancellationPending = isConnectorCancellationPending(connector);
   const connectedStatusMessage =
     statusMessage || "Store connected and ready to use.";
   const connectedBadgeContent = connectedStatusMessage;
@@ -1140,12 +1253,22 @@ export default function Index() {
               style={criticalStatusTitleStyle}
             >
               <span
-                className={`${styles.statusIcon} ${styles.statusIconSuccess} lystr-status-success-dot`}
-                style={criticalStatusIconSuccessStyle}
+                className={
+                  isCancellationPending
+                    ? `${styles.statusPulseWarning} lystr-status-warning-dot`
+                    : `${styles.statusIcon} ${styles.statusIconSuccess} lystr-status-success-dot`
+                }
+                style={
+                  isCancellationPending
+                    ? criticalWarningPulseStyle
+                    : criticalStatusIconSuccessStyle
+                }
                 aria-hidden="true"
               />
               <h1 style={criticalStatusHeadingStyle}>
-                Store connected successfully to Lystr Connect.
+                {isCancellationPending
+                  ? "Store connected until the plan ends."
+                  : "Store connected successfully to Lystr Connect."}
               </h1>
             </div>
             <span
@@ -1155,9 +1278,20 @@ export default function Index() {
             />
             <div
               className={`${styles.statusPill} lystr-status-pill`}
-              style={criticalStatusPillStyle}
+              style={
+                isCancellationPending
+                  ? criticalCanceledStatusPillStyle
+                  : criticalStatusPillStyle
+              }
             >
-              <span className={styles.statusPillIcon} style={criticalStatusPillIconStyle}>
+              <span
+                className={styles.statusPillIcon}
+                style={
+                  isCancellationPending
+                    ? criticalCanceledStatusPillIconStyle
+                    : criticalStatusPillIconStyle
+                }
+              >
                 <CalendarIcon />
               </span>
               <span>{connectedBadgeContent}</span>
