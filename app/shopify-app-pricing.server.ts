@@ -25,7 +25,6 @@ type PartnerActiveSubscription = {
     endTime?: string | null;
   } | null;
   legacySubscriptionId?: string | null;
-  trialEndsAt?: string | null;
   items?: PartnerSubscriptionItem[];
 };
 
@@ -151,7 +150,6 @@ async function getPartnerActiveSubscription({
             activeSubscription(appId: $appId, shopId: $shopId) {
               billingPeriod
               cancelAtEndOfCycle
-              trialEndsAt
               legacySubscriptionId
               currentBillingCycle {
                 startTime
@@ -249,7 +247,6 @@ function subscriptionFromPlanHandle({
     planKey: planDefinition?.key ?? null,
     status: "ACTIVE",
     test: false,
-    trialDays: 0,
     createdAt: startedAt ?? null,
     currentPeriodEnd: currentPeriodEnd ?? null,
     lineItems: [
@@ -299,8 +296,6 @@ function subscriptionFromPartnerActiveSubscription({
     planKey: planDefinition.key,
     status: subscription.cancelAtEndOfCycle ? "CANCELLED" : "ACTIVE",
     test: false,
-    trialDays: 0,
-    trialEndsAt: subscription.trialEndsAt ?? null,
     createdAt: subscription.currentBillingCycle?.startTime ?? null,
     currentPeriodEnd: subscription.currentBillingCycle?.endTime ?? null,
     lineItems: [

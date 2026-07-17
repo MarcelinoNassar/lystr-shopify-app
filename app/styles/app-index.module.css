@@ -308,7 +308,7 @@
 .redirectButton svg,
 .pricingLink svg,
 .statusIcon svg,
-.trialIcon svg {
+.statusPillIcon svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -563,7 +563,7 @@
   line-height: 1.5;
 }
 
-.trialPill {
+.statusPill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -581,11 +581,11 @@
   font-weight: 500;
 }
 
-.trialPill strong {
+.statusPill strong {
   color: #03a44f;
 }
 
-.trialIcon {
+.statusPillIcon {
   display: inline-flex;
   color: #20c463;
 }
@@ -845,7 +845,7 @@
     height: 24px;
   }
 
-  .trialPill {
+  .statusPill {
     width: 100%;
     border-radius: var(--control-radius);
   }

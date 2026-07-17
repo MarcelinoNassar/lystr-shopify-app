@@ -130,7 +130,7 @@ const criticalStatusDividerStyle = {
   background: "#f26a14",
 } satisfies CSSProperties;
 
-const criticalTrialPillStyle = {
+const criticalStatusPillStyle = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -146,7 +146,7 @@ const criticalTrialPillStyle = {
   fontWeight: 500,
 } satisfies CSSProperties;
 
-const criticalTrialIconStyle = {
+const criticalStatusPillIconStyle = {
   display: "inline-flex",
   color: "#20c463",
 } satisfies CSSProperties;
@@ -634,7 +634,7 @@ function StableRouteStyles() {
             font-size: 0.82rem !important;
           }
 
-          .lystr-trial-pill {
+          .lystr-status-pill {
             width: 100% !important;
           }
 
@@ -652,12 +652,8 @@ type ActionData =
   | { error: string; success?: never }
   | { success: true; error?: never };
 
-function getConnectorMessage(status: string, remainingTrialDays: number) {
+function getConnectorMessage(status: string) {
   switch (status) {
-    case "TRIALING":
-      return remainingTrialDays > 0
-        ? `Free trial active. ${remainingTrialDays} day${remainingTrialDays === 1 ? "" : "s"} remaining.`
-        : "Free trial active.";
     case "ACTIVE":
       return "Active Shopify connector subscription.";
     case "GRANDFATHERED":
@@ -1095,7 +1091,7 @@ export default function Index() {
 
   const status = connector?.status ?? (hasPendingStore ? "INCOMPLETE" : "");
   const statusMessage = connector
-    ? getConnectorMessage(connector.status, connector.remainingTrialDays)
+    ? getConnectorMessage(connector.status)
     : hasPendingStore
       ? "Approve Shopify billing to finish connecting this store."
       : "";
@@ -1112,19 +1108,8 @@ export default function Index() {
     !isBillingIncomplete && (connected || actionData?.success === true);
   const connectedStatusMessage =
     statusMessage || "Store connected and ready to use.";
-  const connectedBadgeContent =
-    connector?.status === "TRIALING" && connector.remainingTrialDays > 0 ? (
-      <>
-        Free trial active.{" "}
-        <strong>
-          {connector.remainingTrialDays} day
-          {connector.remainingTrialDays === 1 ? "" : "s"} remaining.
-        </strong>
-      </>
-    ) : (
-      connectedStatusMessage
-    );
-  const trialFeatureTitle = "Shopify-managed trial";
+  const connectedBadgeContent = connectedStatusMessage;
+  const billingFeatureTitle = "Shopify approval";
   const paidPlanCreditValues = Object.values(config.planCredits ?? {}).filter(
     (value): value is number => Number.isFinite(value) && value > 0
   );
@@ -1169,10 +1154,10 @@ export default function Index() {
               aria-hidden="true"
             />
             <div
-              className={`${styles.trialPill} lystr-trial-pill`}
-              style={criticalTrialPillStyle}
+              className={`${styles.statusPill} lystr-status-pill`}
+              style={criticalStatusPillStyle}
             >
-              <span className={styles.trialIcon} style={criticalTrialIconStyle}>
+              <span className={styles.statusPillIcon} style={criticalStatusPillIconStyle}>
                 <CalendarIcon />
               </span>
               <span>{connectedBadgeContent}</span>
@@ -1228,8 +1213,8 @@ export default function Index() {
               >
                 <FeatureItem
                   icon={<CalendarIcon />}
-                  title={trialFeatureTitle}
-                  description="Try all features risk-free"
+                  title={billingFeatureTitle}
+                  description="Paid plans start immediately"
                 />
                 <FeatureItem
                   icon={<TagIcon />}

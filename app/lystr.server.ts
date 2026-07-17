@@ -23,7 +23,6 @@ export type LystrConnectorStatus = {
   monthlyPriceCents: number;
   nextBillingDate?: string | null;
   planCredits?: Record<string, number>;
-  remainingTrialDays: number;
   shopifyPlanHandle?: string | null;
   shopifyPlanKey?: string | null;
   shopifyPlanName?: string | null;
@@ -32,8 +31,6 @@ export type LystrConnectorStatus = {
   status: string;
   storeId?: string | null;
   storeName?: string | null;
-  trialEndsAt: string | null;
-  trialStartedAt: string | null;
 };
 
 export type LystrStoreSummary = {
@@ -48,8 +45,6 @@ export type ShopifySubscriptionForLystr = {
   planKey?: string | null;
   status?: string | null;
   test?: boolean | null;
-  trialDays?: number | null;
-  trialEndsAt?: string | null;
   createdAt?: string | null;
   currentPeriodEnd?: string | null;
   lineItems?: {
