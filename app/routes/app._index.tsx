@@ -1125,10 +1125,19 @@ export default function Index() {
       connectedStatusMessage
     );
   const trialFeatureTitle = "Shopify-managed trial";
+  const paidPlanCreditValues = Object.values(config.planCredits ?? {}).filter(
+    (value): value is number => Number.isFinite(value) && value > 0
+  );
+  const minPaidPlanCredits =
+    paidPlanCreditValues.length > 0 ? Math.min(...paidPlanCreditValues) : 0;
+  const maxPaidPlanCredits =
+    paidPlanCreditValues.length > 0 ? Math.max(...paidPlanCreditValues) : 0;
   const creditFeatureTitle =
-    config.creditsPerSuccessfulPayment === 1
-      ? "1 Lystr credit"
-      : `${config.creditsPerSuccessfulPayment} Lystr credits`;
+    minPaidPlanCredits > 0 && maxPaidPlanCredits > minPaidPlanCredits
+      ? `${minPaidPlanCredits}-${maxPaidPlanCredits} Lystr credits`
+      : minPaidPlanCredits === 1
+        ? "1 Lystr credit"
+        : `${minPaidPlanCredits || config.creditsPerSuccessfulPayment} Lystr credits`;
   const pricingFeatureTitle = "Shopify App Pricing";
 
   return (

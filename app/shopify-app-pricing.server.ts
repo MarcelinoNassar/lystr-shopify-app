@@ -1,4 +1,9 @@
 import type { LystrConnectorConfig, ShopifySubscriptionForLystr } from "./lystr.server";
+import {
+  getAppPricingPlanDefinitionByHandle,
+  isAcceptedAppPricingPlanHandle,
+  isFreeAppPricingPlanHandle,
+} from "./shopify-app-pricing-plans.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -34,15 +39,7 @@ type PartnerSubscriptionItem = {
   } | null;
 };
 
-const FREE_PLAN_HANDLE = "free-plan";
-const PRO_PLAN_HANDLE = "pro-plan";
-const LEGACY_PRO_PLAN_HANDLE = "lystr-connector-monthly";
 const DEFAULT_APP_HANDLE = "lystr-connect";
-const DEFAULT_PLAN_HANDLES = [
-  FREE_PLAN_HANDLE,
-  PRO_PLAN_HANDLE,
-  LEGACY_PRO_PLAN_HANDLE,
-];
 const PARTNER_API_VERSION = "2026-07";
 
 function normalizeHandle(value: string | null | undefined) {
@@ -51,33 +48,6 @@ function normalizeHandle(value: string | null | undefined) {
 
 export function getShopifyAppHandle() {
   return process.env.SHOPIFY_APP_HANDLE?.trim() || DEFAULT_APP_HANDLE;
-}
-
-export function getAppPricingPlanHandles() {
-  const handles = [
-    DEFAULT_PLAN_HANDLES.join(","),
-    process.env.SHOPIFY_APP_PRICING_PLAN_HANDLE,
-    process.env.SHOPIFY_APP_PRICING_PLAN_HANDLES,
-  ]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .flatMap((value) => value.split(","))
-    .map(normalizeHandle)
-    .filter(Boolean);
-
-  return Array.from(new Set(handles));
-}
-
-function isFreePlanHandle(planHandle: string | null | undefined) {
-  return normalizeHandle(planHandle) === FREE_PLAN_HANDLE;
-}
-
-export function isAcceptedAppPricingPlanHandle(planHandle: string | null | undefined) {
-  const normalizedPlanHandle = normalizeHandle(planHandle);
-
-  return (
-    Boolean(normalizedPlanHandle) &&
-    getAppPricingPlanHandles().includes(normalizedPlanHandle)
-  );
 }
 
 export function getPlanHandleFromRequest(request: Request) {
@@ -244,7 +214,7 @@ function getLineItemPrice(
   const currency = item?.price?.currency?.trim().toUpperCase();
 
   if (!Number.isFinite(amount) || amount < 0) {
-    return isFreePlanHandle(item?.handle) ? {
+    return isFreeAppPricingPlanHandle(item?.handle) ? {
       amount: 0,
       currencyCode: currency || config.currency.toUpperCase(),
     } : null;
@@ -271,9 +241,12 @@ function subscriptionFromPlanHandle({
   shopDomain: string;
   startedAt?: string | null;
 }): ShopifySubscriptionForLystr {
+  const planDefinition = getAppPricingPlanDefinitionByHandle(planHandle);
+
   return {
     id: id || `shopify-app-pricing:${shopDomain}:${planHandle}`,
-    name: planHandle,
+    name: planDefinition?.label ?? planHandle,
+    planKey: planDefinition?.key ?? null,
     status: "ACTIVE",
     test: false,
     trialDays: 0,
@@ -306,8 +279,9 @@ function subscriptionFromPartnerActiveSubscription({
 }) {
   const item = getAcceptedPartnerSubscriptionItem(subscription);
   const planHandle = normalizeHandle(item?.handle);
+  const planDefinition = getAppPricingPlanDefinitionByHandle(planHandle);
 
-  if (!subscription || !item || !planHandle) {
+  if (!subscription || !item || !planHandle || !planDefinition) {
     return null;
   }
 
@@ -321,7 +295,8 @@ function subscriptionFromPartnerActiveSubscription({
     id:
       subscription.legacySubscriptionId ||
       `shopify-app-pricing:${shopDomain}:${planHandle}`,
-    name: planHandle,
+    name: planDefinition.label,
+    planKey: planDefinition.key,
     status: subscription.cancelAtEndOfCycle ? "CANCELLED" : "ACTIVE",
     test: false,
     trialDays: 0,
@@ -375,7 +350,7 @@ export async function getCurrentAppPricingSubscription({
     }
   }
 
-  if (redirectPlanHandle && isFreePlanHandle(redirectPlanHandle)) {
+  if (redirectPlanHandle && isFreeAppPricingPlanHandle(redirectPlanHandle)) {
     return subscriptionFromPlanHandle({
       config,
       planHandle: redirectPlanHandle,

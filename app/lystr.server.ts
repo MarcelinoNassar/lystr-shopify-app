@@ -4,6 +4,7 @@ export type LystrConnectorConfig = {
   creditsPerSuccessfulPayment: number;
   currency: string;
   migrationBillingStartsAt: string;
+  planCredits: Record<string, number>;
   planName: string;
 };
 
@@ -21,8 +22,11 @@ export type LystrConnectorStatus = {
   monthlyPrice: number;
   monthlyPriceCents: number;
   nextBillingDate?: string | null;
+  planCredits?: Record<string, number>;
   remainingTrialDays: number;
   shopifyPlanHandle?: string | null;
+  shopifyPlanKey?: string | null;
+  shopifyPlanName?: string | null;
   shopifySubscriptionId?: string | null;
   shopifySubscriptionStatus?: string | null;
   status: string;
@@ -41,6 +45,7 @@ export type LystrStoreSummary = {
 export type ShopifySubscriptionForLystr = {
   id?: string | null;
   name?: string | null;
+  planKey?: string | null;
   status?: string | null;
   test?: boolean | null;
   trialDays?: number | null;
