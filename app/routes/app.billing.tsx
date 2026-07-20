@@ -246,13 +246,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   const currentPeriodEnd = getSubscriptionEnd(currentSubscription, connector);
   const url = new URL(request.url);
+  const reconnectRequested = url.searchParams.get("reconnect") === "1";
+
+  if (
+    connector?.reconnectRequired === true &&
+    remainingPaidAccess &&
+    !reconnectRequested
+  ) {
+    url.searchParams.set("reconnect", "1");
+    throw redirect(`${url.pathname}${url.search}`);
+  }
 
   return {
     currency: config.currency,
     currentPeriodEnd,
     currentPlanKey,
     currentPlanName: currentPlanKey ? PLAN_LABELS[currentPlanKey] : null,
-    isReconnectMode: url.searchParams.get("reconnect") === "1",
+    isReconnectMode:
+      reconnectRequested ||
+      (connector?.reconnectRequired === true && remainingPaidAccess),
     remainingPaidAccess,
     pendingPlanKey:
       (connector?.pendingShopifyPlanKey as BillingPlanKey | null | undefined) ??
@@ -594,6 +606,11 @@ export default function BillingPage() {
   const revalidator = useRevalidator();
   const submittingPlanKey = navigation.formData?.get("planKey");
   const isSubmitting = navigation.state === "submitting";
+  const isProcessing =
+    navigation.state !== "idle" && isPlanKey(submittingPlanKey ?? null);
+  const isReconnecting = Boolean(
+    data.isReconnectMode && submittingPlanKey === data.currentPlanKey,
+  );
   const currentEndLabel = formatDate(data.currentPeriodEnd);
   const pendingStartLabel = formatDate(data.pendingPlanActivatesAt);
 
@@ -618,6 +635,26 @@ export default function BillingPage() {
       );
     };
   }, [revalidator]);
+
+  if (isProcessing) {
+    return (
+      <main className={`${styles.page} ${styles.loadingPage}`} aria-busy="true">
+        <section
+          className={styles.loadingState}
+          role="status"
+          aria-live="polite"
+        >
+          <span className={styles.loadingSpinner} aria-hidden="true" />
+          <h1>
+            {isReconnecting
+              ? "Reconnecting your store..."
+              : "Processing your plan..."}
+          </h1>
+          <p>Please wait while Lystr confirms your billing and connection.</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className={styles.page}>
