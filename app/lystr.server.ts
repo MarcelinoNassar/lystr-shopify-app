@@ -116,6 +116,7 @@ async function requestLystr<T>(path: string, init?: RequestInit) {
 export async function getLystrConnectorConfig() {
   return requestLystr<{ config: LystrConnectorConfig }>(
     "/api/shopify-connector/config",
+    { cache: "no-store" },
   );
 }
 

@@ -188,9 +188,9 @@ export function getShopifyAppHandle() {
 }
 
 export function isShopifyManualBillingEnabled() {
-  return (
-    process.env.SHOPIFY_MANUAL_BILLING_ENABLED?.trim().toLowerCase() === "true"
-  );
+  // Lystr owns plan selection in /app/billing. Shopify's hosted App Pricing
+  // page is retired and must not be used as a fallback.
+  return true;
 }
 
 export function getPlanHandleFromRequest(request: Request) {

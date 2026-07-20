@@ -22,8 +22,9 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      <style>
-        {`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
           .lystr-footer s-link {
             color: #6d7175;
             font-size: 0.75rem;
@@ -90,8 +91,9 @@ export default function App() {
             z-index: 1;
             background: transparent !important;
           }
-        `}
-      </style>
+        `,
+        }}
+      />
       <div
         className="lystr-app-shell"
         style={{

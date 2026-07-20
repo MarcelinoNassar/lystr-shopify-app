@@ -426,8 +426,9 @@ const criticalSpinnerStyle = {
 
 function StableRouteStyles() {
   return (
-    <style>
-      {`
+    <style
+      dangerouslySetInnerHTML={{
+        __html: `
         @keyframes lystr-spin {
           to { transform: rotate(360deg); }
         }
@@ -646,8 +647,9 @@ function StableRouteStyles() {
             white-space: normal !important;
           }
         }
-      `}
-    </style>
+      `,
+      }}
+    />
   );
 }
 
@@ -1099,19 +1101,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const connectorHasAttachedStore = Boolean(connector?.storeId);
-  const reconnectRequired = connector?.reconnectRequired === true;
-
   return {
     appPricingUrl: isShopifyManualBillingEnabled()
       ? "/app/billing"
       : getAppPricingPlanSelectionUrl(session.shop),
     config: configResponse.config,
-    connected: Boolean(
-      !reconnectRequired &&
-        (connected ||
-          (store?.connected && !connector) ||
-          (connector?.accessAllowed && connectorHasAttachedStore))
-    ),
+    connected: connector
+      ? Boolean(connector.accessAllowed && connectorHasAttachedStore)
+      : connected,
     connector,
     hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),
     shopDomain: session.shop,
@@ -1248,7 +1245,16 @@ export default function Index() {
     connector?.accessAllowed !== true;
   const isConnected =
     !isBillingIncomplete && (connected || actionData?.success === true);
-  const connectedBadgeContent = "Active Shopify connector subscription.";
+  const isPaidAccessEnding = Boolean(
+    isConnected &&
+      connector?.reconnectRequired === true &&
+      connector.accessAllowed
+  );
+  const connectedBadgeContent = isPaidAccessEnding
+    ? connector
+      ? getConnectorMessage(connector)
+      : "Store connected until the paid period ends."
+    : "Active Shopify connector subscription.";
   const billingFeatureTitle = "Shopify approval";
   const paidPlanCreditValues = Object.values(config.planCredits ?? {}).filter(
     (value): value is number => Number.isFinite(value) && value > 0
@@ -1280,12 +1286,22 @@ export default function Index() {
               style={criticalStatusTitleStyle}
             >
               <span
-                className={`${styles.statusIcon} ${styles.statusIconSuccess} lystr-status-success-dot`}
-                style={criticalStatusIconSuccessStyle}
+                className={
+                  isPaidAccessEnding
+                    ? `${styles.statusPulseWarning} lystr-status-warning-dot`
+                    : `${styles.statusIcon} ${styles.statusIconSuccess} lystr-status-success-dot`
+                }
+                style={
+                  isPaidAccessEnding
+                    ? criticalWarningPulseStyle
+                    : criticalStatusIconSuccessStyle
+                }
                 aria-hidden="true"
               />
               <h1 style={criticalStatusHeadingStyle}>
-                Store connected successfully to Lystr Connect.
+                {isPaidAccessEnding
+                  ? "Store connected until the plan ends."
+                  : "Store connected successfully to Lystr Connect."}
               </h1>
             </div>
             <span

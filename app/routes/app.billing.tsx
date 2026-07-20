@@ -1,9 +1,11 @@
+import { useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
   useActionData,
   useLoaderData,
   useNavigation,
+  useRevalidator,
 } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -589,10 +591,33 @@ export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
   const actionData = useActionData<{ error?: string }>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const submittingPlanKey = navigation.formData?.get("planKey");
   const isSubmitting = navigation.state === "submitting";
   const currentEndLabel = formatDate(data.currentPeriodEnd);
   const pendingStartLabel = formatDate(data.pendingPlanActivatesAt);
+
+  useEffect(() => {
+    const refreshConfiguredPricing = () => {
+      if (
+        document.visibilityState === "visible" &&
+        revalidator.state === "idle"
+      ) {
+        void revalidator.revalidate();
+      }
+    };
+
+    window.addEventListener("focus", refreshConfiguredPricing);
+    document.addEventListener("visibilitychange", refreshConfiguredPricing);
+
+    return () => {
+      window.removeEventListener("focus", refreshConfiguredPricing);
+      document.removeEventListener(
+        "visibilitychange",
+        refreshConfiguredPricing,
+      );
+    };
+  }, [revalidator]);
 
   return (
     <main className={styles.page}>
@@ -695,13 +720,18 @@ export default function BillingPage() {
               </div>
               <div>
                 <h2>{plan.label}</h2>
-                <p className={styles.price}>
-                  {plan.key === "free"
-                    ? "No recurring charge"
-                    : plan.price > 0
-                      ? `${formatPrice(plan.price, data.currency)} every 30 days`
-                      : "Billing price not configured"}
-                </p>
+                {plan.key === "free" ? (
+                  <p className={styles.freePrice}>No recurring charge</p>
+                ) : plan.isConfigured ? (
+                  <p className={styles.price}>
+                    <strong>{formatPrice(plan.price, data.currency)}</strong>
+                    <span> every 30 days</span>
+                  </p>
+                ) : (
+                  <p className={styles.unconfiguredPrice}>
+                    Billing price not configured
+                  </p>
+                )}
               </div>
               <div className={styles.divider} />
               <p className={styles.credits}>
