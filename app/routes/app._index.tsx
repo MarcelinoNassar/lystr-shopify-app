@@ -1064,7 +1064,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ) {
     try {
       await cancelCurrentAppPricingSubscription({ admin });
-      throw redirect("/app", { target: "_top" });
+      throw redirect("/app");
     } catch (error) {
       if (error instanceof Response) {
         throw error;
@@ -1203,14 +1203,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const errorMessage = getErrorMessage(error);
 
     if (isBillingApprovalRequiredMessage(errorMessage)) {
-      return redirect(
-        isShopifyManualBillingEnabled()
-          ? "/app/billing"
-          : getAppPricingPlanSelectionUrl(session.shop),
-        {
+      if (isShopifyManualBillingEnabled()) {
+        return redirect("/app/billing");
+      }
+
+      return redirect(getAppPricingPlanSelectionUrl(session.shop), {
         target: "_top",
-        }
-      );
+      });
     }
 
     console.error("Failed to connect Lystr store from Shopify app.", error);
@@ -1221,14 +1220,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  return redirect(
-    isShopifyManualBillingEnabled()
-      ? "/app/billing"
-      : getAppPricingPlanSelectionUrl(session.shop),
-    {
+  if (isShopifyManualBillingEnabled()) {
+    return redirect("/app/billing");
+  }
+
+  return redirect(getAppPricingPlanSelectionUrl(session.shop), {
     target: "_top",
-    }
-  );
+  });
 };
 
 export default function Index() {

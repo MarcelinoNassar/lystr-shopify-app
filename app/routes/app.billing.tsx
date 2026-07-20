@@ -356,7 +356,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           shopifySubscription: pendingSubscription,
         });
 
-        return redirect("/app/billing?reconnect=1", { target: "_top" });
+        return redirect("/app/billing?reconnect=1");
       }
 
       if (pendingSubscription && pendingStatus) {
@@ -389,7 +389,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopifySubscription: currentSubscription,
       });
 
-      return redirect("/app", { target: "_top" });
+      return redirect("/app");
     }
 
     if (remainingPaidAccess && currentSubscription && currentPeriodEnd) {
@@ -425,22 +425,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         });
 
-        return redirect("/app/billing?reconnect=1&scheduled=1", {
-          target: "_top",
-        });
+        return redirect("/app/billing?reconnect=1&scheduled=1");
       }
 
       const price = Number(config.planPrices?.[planKey] ?? 0);
 
-      if (!Number.isFinite(price) || price <= 0) {
-        throw new Error(
-          `${PLAN_LABELS[planKey]} billing price is not configured in Lystr.`,
-        );
-      }
-
       const canDeferWithShopify =
         currentSubscription.billingSource === "manual" &&
-        currentSubscription.status?.trim().toUpperCase() === "ACTIVE";
+        currentSubscription.status?.trim().toUpperCase() === "ACTIVE" &&
+        Number.isFinite(price) &&
+        price > 0;
 
       if (canDeferWithShopify) {
         const returnUrl = getManualBillingReturnUrl({
@@ -482,9 +476,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopifySubscription: currentSubscription,
       });
 
-      return redirect("/app/billing?reconnect=1&scheduled=1", {
-        target: "_top",
-      });
+      return redirect("/app/billing?reconnect=1&scheduled=1");
     }
 
     if (planKey === "free") {
@@ -499,7 +491,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopifySubscription: getFreeShopifySubscription(session.shop, config),
       });
 
-      return redirect("/app", { target: "_top" });
+      return redirect("/app");
     }
 
     const price = Number(config.planPrices?.[planKey] ?? 0);
@@ -672,8 +664,7 @@ export default function BillingPage() {
           const isDisabled =
             isSubmitting ||
             currentWithoutReconnect ||
-            (requiresNewCharge && !plan.isConfigured) ||
-            (switchAfterPeriod && plan.key !== "free" && !plan.isConfigured);
+            (requiresNewCharge && !plan.isConfigured);
           const buttonLabel =
             isSubmitting && submittingPlanKey === plan.key
               ? "Processing..."
