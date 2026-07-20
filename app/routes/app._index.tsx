@@ -1038,6 +1038,8 @@ function LoadingSpinner() {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, redirect, session } = await authenticate.admin(request);
+  const requestUrl = new URL(request.url);
+  const isBillingReturn = requestUrl.searchParams.get("billing_return") === "1";
 
   const store = await prisma.store.findFirst({
     where: { shopDomain: session.shop },
@@ -1057,7 +1059,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   if (
-    new URL(request.url).searchParams.get("cancel_legacy") === "1" &&
+    requestUrl.searchParams.get("cancel_legacy") === "1" &&
     activeSubscription?.billingSource === "manual"
   ) {
     try {
@@ -1084,6 +1086,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (
     session.accessToken &&
     canFinalizeWithCurrentSubscription &&
+    (!connector?.reconnectRequired || isBillingReturn) &&
     (store?.apiKey || connector?.connectionPending || connector?.storeId)
   ) {
     try {
@@ -1103,6 +1106,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const connectorHasAttachedStore = Boolean(connector?.storeId);
+  const reconnectRequired = connector?.reconnectRequired === true;
 
   return {
     appPricingUrl: isShopifyManualBillingEnabled()
@@ -1110,9 +1114,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : getAppPricingPlanSelectionUrl(session.shop),
     config: configResponse.config,
     connected: Boolean(
-      connected ||
-        (store?.connected && !connector) ||
-        (connector?.accessAllowed && connectorHasAttachedStore)
+      !reconnectRequired &&
+        (connected ||
+          (store?.connected && !connector) ||
+          (connector?.accessAllowed && connectorHasAttachedStore))
     ),
     connector,
     hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),

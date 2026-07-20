@@ -30,6 +30,13 @@ export type LystrConnectorStatus = {
   shopifyBillingSource?: string | null;
   shopifySubscriptionId?: string | null;
   shopifySubscriptionStatus?: string | null;
+  pendingShopifyPlanKey?: string | null;
+  pendingShopifyPlanName?: string | null;
+  pendingShopifyPlanStatus?: string | null;
+  pendingShopifySubscriptionId?: string | null;
+  pendingShopifyPlanRequestedAt?: string | null;
+  pendingShopifyPlanActivatesAt?: string | null;
+  reconnectRequired?: boolean;
   status: string;
   storeId?: string | null;
   storeName?: string | null;
@@ -99,7 +106,7 @@ async function requestLystr<T>(path: string, init?: RequestInit) {
   if (!response.ok) {
     throw new Error(
       data.error ||
-        `Lystr API request failed for ${path} (${response.status} ${response.statusText}).`
+        `Lystr API request failed for ${path} (${response.status} ${response.statusText}).`,
     );
   }
 
@@ -108,7 +115,7 @@ async function requestLystr<T>(path: string, init?: RequestInit) {
 
 export async function getLystrConnectorConfig() {
   return requestLystr<{ config: LystrConnectorConfig }>(
-    "/api/shopify-connector/config"
+    "/api/shopify-connector/config",
   );
 }
 
@@ -126,15 +133,13 @@ export async function prepareLystrStoreConnection(input: {
   });
 }
 
-export async function getLystrConnectorStatus(input: {
-  shopDomain: string;
-}) {
+export async function getLystrConnectorStatus(input: { shopDomain: string }) {
   return requestLystr<{
     connector: LystrConnectorStatus;
   }>(
     `/api/shopify-connector/status?shopDomain=${encodeURIComponent(
-      input.shopDomain
-    )}`
+      input.shopDomain,
+    )}`,
   );
 }
 
@@ -169,6 +174,23 @@ export async function syncLystrConnectorBilling(input: {
   });
 }
 
+export async function updateLystrConnectorPlanTransition(input: {
+  action: "clear" | "schedule";
+  activatesAt?: string;
+  pendingSubscriptionId?: string | null;
+  planKey?: "free" | "basic" | "pro" | "premium";
+  shopDomain: string;
+  status?: "SCHEDULED" | "PENDING_APPROVAL" | "APPROVED";
+}) {
+  return requestLystr<{ connector: LystrConnectorStatus }>(
+    "/api/shopify-connector/billing/plan-transition",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export async function syncLystrCreditTopUp(input: {
   shopDomain: string;
   shopifyPurchaseId: string;
@@ -179,7 +201,7 @@ export async function syncLystrCreditTopUp(input: {
     {
       method: "POST",
       body: JSON.stringify(input),
-    }
+    },
   );
 }
 
@@ -192,6 +214,6 @@ export async function markLystrConnectorUninstalled(input: {
     {
       method: "POST",
       body: JSON.stringify(input),
-    }
+    },
   );
 }

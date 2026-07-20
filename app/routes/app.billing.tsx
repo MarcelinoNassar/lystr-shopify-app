@@ -1,25 +1,35 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import styles from "../styles/app-billing.module.css";
 import {
   connectLystrStore,
   getLystrConnectorConfig,
   getLystrConnectorStatus,
+  updateLystrConnectorPlanTransition,
+  type LystrConnectorStatus,
+  type ShopifySubscriptionForLystr,
 } from "../lystr.server";
 import {
-  cancelCurrentAppPricingSubscription,
   cancelManualBillingSubscription,
   createManualBillingSubscription,
-  getCurrentAppPricingSubscription,
+  getAppPricingPlanSelectionUrl,
   getCurrentShopifyBillingSubscription,
   getFreeShopifySubscription,
   getManualBillingReturnUrl,
-  getAppPricingPlanSelectionUrl,
+  getShopifyBillingSubscriptionById,
   isShopifyManualBillingEnabled,
 } from "../shopify-app-pricing.server";
+
 const PLAN_KEYS = ["free", "basic", "pro", "premium"] as const;
 type BillingPlanKey = (typeof PLAN_KEYS)[number];
+
 const PLAN_LABELS: Record<BillingPlanKey, string> = {
   free: "Free",
   basic: "Basic",
@@ -28,7 +38,9 @@ const PLAN_LABELS: Record<BillingPlanKey, string> = {
 };
 
 function isPlanKey(value: FormDataEntryValue | null): value is BillingPlanKey {
-  return typeof value === "string" && PLAN_KEYS.includes(value as BillingPlanKey);
+  return (
+    typeof value === "string" && PLAN_KEYS.includes(value as BillingPlanKey)
+  );
 }
 
 function formatPrice(value: number, currency: string) {
@@ -39,42 +51,229 @@ function formatPrice(value: number, currency: string) {
   }).format(value);
 }
 
+function formatDate(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function getSubscriptionPrice(
+  subscription?: ShopifySubscriptionForLystr | null,
+) {
+  const amount = Number(
+    subscription?.lineItems?.[0]?.plan?.pricingDetails?.price?.amount,
+  );
+
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
+function getSubscriptionEnd(
+  subscription: ShopifySubscriptionForLystr | null,
+  connector: LystrConnectorStatus | null,
+) {
+  return subscription?.currentPeriodEnd ?? connector?.nextBillingDate ?? null;
+}
+
+function hasRemainingPaidAccess({
+  connector,
+  currentPlanKey,
+  subscription,
+}: {
+  connector: LystrConnectorStatus | null;
+  currentPlanKey: string | null;
+  subscription: ShopifySubscriptionForLystr | null;
+}) {
+  if (!currentPlanKey || currentPlanKey === "free") {
+    return false;
+  }
+
+  const status = (
+    subscription?.status ??
+    connector?.shopifySubscriptionStatus ??
+    connector?.status
+  )
+    ?.trim()
+    .toUpperCase();
+  const periodEnd = getSubscriptionEnd(subscription, connector);
+  const periodEndDate = periodEnd ? new Date(periodEnd) : null;
+
+  return Boolean(
+    connector?.accessAllowed &&
+    status !== "FROZEN" &&
+    status !== "DECLINED" &&
+    status !== "EXPIRED" &&
+    periodEndDate &&
+    !Number.isNaN(periodEndDate.getTime()) &&
+    periodEndDate.getTime() > Date.now(),
+  );
+}
+
+async function getVerifiedCurrentSubscription({
+  admin,
+  connector,
+  currentSubscription,
+}: {
+  admin: Parameters<typeof getShopifyBillingSubscriptionById>[0]["admin"];
+  connector: LystrConnectorStatus | null;
+  currentSubscription: ShopifySubscriptionForLystr | null;
+}) {
+  const storedSubscriptionId = connector?.shopifySubscriptionId?.trim();
+  const storedPlanKey = connector?.shopifyPlanKey as
+    | BillingPlanKey
+    | null
+    | undefined;
+
+  if (
+    storedSubscriptionId &&
+    (!currentSubscription ||
+      currentSubscription.id !== storedSubscriptionId ||
+      currentSubscription.planKey !== storedPlanKey)
+  ) {
+    const storedSubscription = await getShopifyBillingSubscriptionById({
+      admin,
+      planKey: storedPlanKey ?? null,
+      subscriptionId: storedSubscriptionId,
+    }).catch((error) => {
+      console.warn("Failed to verify the stored Shopify subscription.", error);
+      return null;
+    });
+
+    if (storedSubscription) {
+      return storedSubscription;
+    }
+  }
+
+  return currentSubscription;
+}
+
+async function loadBillingState({
+  accessToken,
+  admin,
+  request,
+  shopDomain,
+}: {
+  accessToken?: string | null;
+  admin: Parameters<typeof getCurrentShopifyBillingSubscription>[0]["admin"];
+  request: Request;
+  shopDomain: string;
+}) {
+  const [{ config }, statusResponse] = await Promise.all([
+    getLystrConnectorConfig(),
+    getLystrConnectorStatus({ shopDomain }).catch(() => null),
+  ]);
+  let connector = statusResponse?.connector ?? null;
+  let currentSubscription = await getCurrentShopifyBillingSubscription({
+    admin,
+    config,
+    request,
+    shopDomain,
+  });
+
+  if (
+    connector?.pendingShopifyPlanStatus === "APPROVED" &&
+    connector.pendingShopifyPlanActivatesAt &&
+    new Date(connector.pendingShopifyPlanActivatesAt).getTime() <= Date.now() &&
+    (!connector.reconnectRequired ||
+      new URL(request.url).searchParams.get("billing_return") === "1") &&
+    currentSubscription?.planKey === connector.pendingShopifyPlanKey
+  ) {
+    const localStore = await prisma.store.findFirst({
+      where: { shopDomain },
+    });
+
+    if (accessToken && localStore) {
+      const result = await connectLystrStore({
+        accessToken,
+        apiKey: localStore.apiKey ?? undefined,
+        shopDomain,
+        shopifySubscription: currentSubscription,
+      }).catch(() => null);
+
+      if (result?.connector) {
+        connector = result.connector;
+      }
+    }
+  }
+
+  currentSubscription = await getVerifiedCurrentSubscription({
+    admin,
+    connector,
+    currentSubscription,
+  });
+
+  return { config, connector, currentSubscription };
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, redirect, session } = await authenticate.admin(request);
 
   if (!isShopifyManualBillingEnabled()) {
-    throw redirect(getAppPricingPlanSelectionUrl(session.shop), { target: "_top" });
+    throw redirect(getAppPricingPlanSelectionUrl(session.shop), {
+      target: "_top",
+    });
   }
-  const { config } = await getLystrConnectorConfig();
-  const currentSubscription = await getCurrentShopifyBillingSubscription({
+
+  const { config, connector, currentSubscription } = await loadBillingState({
+    accessToken: session.accessToken,
     admin,
-    config,
     request,
     shopDomain: session.shop,
   });
-  const connectorStatus = await getLystrConnectorStatus({
-    shopDomain: session.shop,
-  }).catch(() => null);
-  const connectorCancellationPending = Boolean(
-    connectorStatus?.connector.accessAllowed &&
-      connectorStatus.connector.status.trim().toUpperCase() === "CANCELED"
-  );
+  const currentPlanKey =
+    (connector?.shopifyPlanKey as BillingPlanKey | null | undefined) ??
+    (currentSubscription?.planKey as BillingPlanKey | null | undefined) ??
+    null;
+  const currentSubscriptionPrice =
+    getSubscriptionPrice(currentSubscription) ||
+    Number(connector?.monthlyPrice ?? 0);
+  const remainingPaidAccess = hasRemainingPaidAccess({
+    connector,
+    currentPlanKey,
+    subscription: currentSubscription,
+  });
+  const currentPeriodEnd = getSubscriptionEnd(currentSubscription, connector);
+  const url = new URL(request.url);
 
   return {
-    activePlanKey:
-      currentSubscription?.planKey ?? connectorStatus?.connector.shopifyPlanKey ?? null,
-    isCancellationPending:
-      currentSubscription?.status?.trim().toUpperCase() === "CANCELLED" ||
-      connectorCancellationPending,
     currency: config.currency,
+    currentPeriodEnd,
+    currentPlanKey,
+    currentPlanName: currentPlanKey ? PLAN_LABELS[currentPlanKey] : null,
+    isReconnectMode: url.searchParams.get("reconnect") === "1",
+    remainingPaidAccess,
+    pendingPlanKey:
+      (connector?.pendingShopifyPlanKey as BillingPlanKey | null | undefined) ??
+      null,
+    pendingPlanName: connector?.pendingShopifyPlanName ?? null,
+    pendingPlanStatus: connector?.pendingShopifyPlanStatus ?? null,
+    pendingPlanActivatesAt: connector?.pendingShopifyPlanActivatesAt ?? null,
     plans: PLAN_KEYS.map((planKey) => {
       const isFree = planKey === "free";
+      const configuredPrice = isFree
+        ? 0
+        : Number(config.planPrices?.[planKey] ?? 0);
+      const displayPrice =
+        planKey === currentPlanKey && configuredPrice <= 0
+          ? currentSubscriptionPrice
+          : configuredPrice;
 
       return {
         credits: isFree ? 0 : Number(config.planCredits?.[planKey] ?? 0),
+        isConfigured: isFree || configuredPrice > 0,
         key: planKey,
         label: PLAN_LABELS[planKey],
-        price: isFree ? 0 : Number(config.planPrices?.[planKey] ?? 0),
+        price: displayPrice,
       };
     }),
   };
@@ -84,193 +283,485 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, redirect, session } = await authenticate.admin(request);
 
   if (!isShopifyManualBillingEnabled()) {
-    return redirect(getAppPricingPlanSelectionUrl(session.shop), { target: "_top" });
+    return redirect(getAppPricingPlanSelectionUrl(session.shop), {
+      target: "_top",
+    });
   }
+
   const formData = await request.formData();
   const planKey = formData.get("planKey");
 
   if (!isPlanKey(planKey)) {
-    return Response.json({ error: "Select a valid Lystr plan." }, { status: 400 });
+    return Response.json(
+      { error: "Select a valid Lystr plan." },
+      { status: 400 },
+    );
   }
 
   try {
-    const { config } = await getLystrConnectorConfig();
-    const currentSubscription = await getCurrentShopifyBillingSubscription({
+    const { config, connector, currentSubscription } = await loadBillingState({
+      accessToken: session.accessToken,
       admin,
-      config,
       request,
       shopDomain: session.shop,
     });
+    const localStore = await prisma.store.findFirst({
+      where: { shopDomain: session.shop },
+    });
 
-    if (planKey === "free") {
-      if (currentSubscription?.billingSource === "manual" && currentSubscription.id) {
-        await cancelManualBillingSubscription({
-          admin,
-          subscriptionId: currentSubscription.id,
+    if (!session.accessToken || !localStore) {
+      throw new Error("The Shopify store connection could not be verified.");
+    }
+
+    const currentPlanKey =
+      (connector?.shopifyPlanKey as BillingPlanKey | null | undefined) ??
+      (currentSubscription?.planKey as BillingPlanKey | null | undefined) ??
+      null;
+    const remainingPaidAccess = hasRemainingPaidAccess({
+      connector,
+      currentPlanKey,
+      subscription: currentSubscription,
+    });
+    const currentPeriodEnd = getSubscriptionEnd(currentSubscription, connector);
+
+    if (connector?.pendingShopifySubscriptionId) {
+      const pendingSubscription = await getShopifyBillingSubscriptionById({
+        admin,
+        planKey:
+          (connector.pendingShopifyPlanKey as
+            | BillingPlanKey
+            | null
+            | undefined) ?? null,
+        subscriptionId: connector.pendingShopifySubscriptionId,
+      }).catch(() => null);
+      const pendingStatus = pendingSubscription?.status?.trim().toUpperCase();
+
+      if (!pendingSubscription) {
+        throw new Error(
+          "Lystr could not verify the pending Shopify subscription, so no duplicate charge was created. Reload and try again.",
+        );
+      }
+
+      if (pendingStatus === "PENDING") {
+        throw new Error(
+          "A Shopify plan approval is already pending. Complete or decline that approval before starting another plan change.",
+        );
+      }
+
+      if (pendingStatus === "ACTIVE" || pendingStatus === "ACCEPTED") {
+        await connectLystrStore({
+          accessToken: session.accessToken,
+          apiKey: localStore.apiKey ?? undefined,
+          shopDomain: session.shop,
+          shopifySubscription: pendingSubscription,
         });
-      } else if (currentSubscription?.billingSource === "app_pricing") {
-        await cancelCurrentAppPricingSubscription({ admin });
+
+        return redirect("/app/billing?reconnect=1", { target: "_top" });
       }
 
-      const localStore = await prisma.store.findFirst({
-        where: { shopDomain: session.shop },
+      if (pendingSubscription && pendingStatus) {
+        await updateLystrConnectorPlanTransition({
+          action: "clear",
+          shopDomain: session.shop,
+        });
+      }
+    }
+
+    if (remainingPaidAccess && !currentSubscription) {
+      throw new Error(
+        "Lystr could not verify the existing Shopify subscription, so no new charge was created. Reload and try again.",
+      );
+    }
+
+    if (
+      remainingPaidAccess &&
+      currentSubscription &&
+      planKey === currentPlanKey
+    ) {
+      await updateLystrConnectorPlanTransition({
+        action: "clear",
+        shopDomain: session.shop,
       });
-      const freeSubscription = getFreeShopifySubscription(session.shop, config);
-
-      if (!session.accessToken) {
-        throw new Error("Shopify access token is missing for this store.");
-      }
-
       await connectLystrStore({
         accessToken: session.accessToken,
-        apiKey: localStore?.apiKey ?? undefined,
+        apiKey: localStore.apiKey ?? undefined,
         shopDomain: session.shop,
-        shopifySubscription: freeSubscription,
+        shopifySubscription: currentSubscription,
       });
 
       return redirect("/app", { target: "_top" });
     }
 
-    const legacySubscription = await getCurrentAppPricingSubscription({
-      admin,
-      config,
-      request,
-      shopDomain: session.shop,
-    });
+    if (remainingPaidAccess && currentSubscription && currentPeriodEnd) {
+      if (planKey === "free") {
+        if (
+          currentSubscription.billingSource === "manual" &&
+          currentSubscription.status?.trim().toUpperCase() === "ACTIVE" &&
+          currentSubscription.id
+        ) {
+          await cancelManualBillingSubscription({
+            admin,
+            subscriptionId: currentSubscription.id,
+          });
+        }
+
+        await updateLystrConnectorPlanTransition({
+          action: "schedule",
+          activatesAt: currentPeriodEnd,
+          planKey,
+          shopDomain: session.shop,
+          status: "SCHEDULED",
+        });
+        await connectLystrStore({
+          accessToken: session.accessToken,
+          apiKey: localStore.apiKey ?? undefined,
+          shopDomain: session.shop,
+          shopifySubscription: {
+            ...currentSubscription,
+            status:
+              currentSubscription.status?.trim().toUpperCase() === "ACTIVE"
+                ? "CANCELLED"
+                : currentSubscription.status,
+          },
+        });
+
+        return redirect("/app/billing?reconnect=1&scheduled=1", {
+          target: "_top",
+        });
+      }
+
+      const price = Number(config.planPrices?.[planKey] ?? 0);
+
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error(
+          `${PLAN_LABELS[planKey]} billing price is not configured in Lystr.`,
+        );
+      }
+
+      const canDeferWithShopify =
+        currentSubscription.billingSource === "manual" &&
+        currentSubscription.status?.trim().toUpperCase() === "ACTIVE";
+
+      if (canDeferWithShopify) {
+        const returnUrl = getManualBillingReturnUrl({
+          cancelLegacySubscription: false,
+          deferredPlanChange: true,
+          planKey,
+        });
+        const pending = await createManualBillingSubscription({
+          admin,
+          config,
+          planKey,
+          replacementBehavior: "APPLY_ON_NEXT_BILLING_CYCLE",
+          returnUrl,
+        });
+
+        await updateLystrConnectorPlanTransition({
+          action: "schedule",
+          activatesAt: currentPeriodEnd,
+          pendingSubscriptionId: pending.subscriptionId,
+          planKey,
+          shopDomain: session.shop,
+          status: "PENDING_APPROVAL",
+        });
+
+        return redirect(pending.confirmationUrl, { target: "_top" });
+      }
+
+      await updateLystrConnectorPlanTransition({
+        action: "schedule",
+        activatesAt: currentPeriodEnd,
+        planKey,
+        shopDomain: session.shop,
+        status: "SCHEDULED",
+      });
+      await connectLystrStore({
+        accessToken: session.accessToken,
+        apiKey: localStore.apiKey ?? undefined,
+        shopDomain: session.shop,
+        shopifySubscription: currentSubscription,
+      });
+
+      return redirect("/app/billing?reconnect=1&scheduled=1", {
+        target: "_top",
+      });
+    }
+
+    if (planKey === "free") {
+      await updateLystrConnectorPlanTransition({
+        action: "clear",
+        shopDomain: session.shop,
+      });
+      await connectLystrStore({
+        accessToken: session.accessToken,
+        apiKey: localStore.apiKey ?? undefined,
+        shopDomain: session.shop,
+        shopifySubscription: getFreeShopifySubscription(session.shop, config),
+      });
+
+      return redirect("/app", { target: "_top" });
+    }
+
+    const price = Number(config.planPrices?.[planKey] ?? 0);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error(
+        `${PLAN_LABELS[planKey]} billing price is not configured in Lystr.`,
+      );
+    }
+
     const returnUrl = getManualBillingReturnUrl({
-      cancelLegacySubscription: Boolean(legacySubscription),
+      cancelLegacySubscription:
+        currentSubscription?.billingSource === "app_pricing",
       planKey,
     });
-    const confirmationUrl = await createManualBillingSubscription({
+    const pending = await createManualBillingSubscription({
       admin,
       config,
       planKey,
+      replacementBehavior: "APPLY_IMMEDIATELY",
       returnUrl,
     });
 
-    return redirect(confirmationUrl, { target: "_top" });
+    await updateLystrConnectorPlanTransition({
+      action: "schedule",
+      activatesAt: new Date().toISOString(),
+      pendingSubscriptionId: pending.subscriptionId,
+      planKey,
+      shopDomain: session.shop,
+      status: "PENDING_APPROVAL",
+    });
+
+    return redirect(pending.confirmationUrl, { target: "_top" });
   } catch (error) {
-    console.error("Failed to start Shopify billing.", error);
+    if (error instanceof Response) {
+      throw error;
+    }
+
+    console.error("Failed to process Shopify billing selection.", error);
     return Response.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "Shopify could not start billing for this plan.",
+            : "Shopify could not process this billing selection.",
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 };
 
-export default function BillingPage() {
-  const { activePlanKey, currency, isCancellationPending, plans } =
-    useLoaderData<typeof loader>();
-  const actionData = useActionData<{ error?: string }>();
+function PlanIcon({ planKey }: { planKey: BillingPlanKey }) {
+  const paths: Record<BillingPlanKey, JSX.Element> = {
+    free: (
+      <>
+        <path d="M20 12v9H4v-9" />
+        <path d="M2 7h20v5H2z" />
+        <path d="M12 7v14M12 7H7.5a2.5 2.5 0 1 1 2.1-3.85L12 7Zm0 0h4.5a2.5 2.5 0 1 0-2.1-3.85L12 7Z" />
+      </>
+    ),
+    basic: (
+      <path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8-6.2-3.2L5.8 21 7 14.2l-5-4.9 6.9-1L12 2Z" />
+    ),
+    pro: (
+      <>
+        <path d="m3 7 4.5 4L12 4l4.5 7L21 7l-2 12H5L3 7Z" />
+        <path d="M5 19h14" />
+      </>
+    ),
+    premium: (
+      <>
+        <path d="m12 2 4 5h5l-9 15L3 7h5l4-5Z" />
+        <path d="M8 7h8l-4 15L8 7Z" />
+      </>
+    ),
+  };
 
   return (
-    <div
-      style={{
-        width: "100%",
-        minHeight: "100%",
-        overflowY: "auto",
-        padding: "2rem 1.25rem",
-        boxSizing: "border-box",
-        background: "#fffefe",
-        color: "#17191c",
-      }}
-    >
-      <div style={{ width: "min(100%, 980px)", margin: "0 auto" }}>
-        <h1 style={{ margin: 0, fontSize: "1.75rem", lineHeight: 1.2 }}>
-          Choose your Lystr plan
-        </h1>
-        <p style={{ color: "#61666c", margin: "0.5rem 0 1.5rem" }}>
-          Paid plans are billed every 30 days through Shopify.
-        </p>
-        {actionData?.error ? (
-          <p
-            role="alert"
-            style={{
-              padding: "0.75rem 1rem",
-              border: "1px solid #e8a6a6",
-              borderRadius: 6,
-              color: "#8c1d18",
-              background: "#fff4f4",
-            }}
-          >
-            {actionData.error}
-          </p>
-        ) : null}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-            gap: "0.9rem",
-          }}
-        >
-          {plans.map((plan) => {
-            const isActive = activePlanKey === plan.key;
-            const isReconnectPlan = isActive && isCancellationPending;
-            const isConfigured = plan.key === "free" || plan.price > 0;
-            const isDisabled = (isActive && !isReconnectPlan) || !isConfigured;
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {paths[planKey]}
+    </svg>
+  );
+}
 
-            return (
-              <section
-                key={plan.key}
-                style={{
-                  border: isActive ? "2px solid #f26a14" : "1px solid #d9dcdf",
-                  borderRadius: 8,
-                  padding: "1.1rem",
-                  background: "#ffffff",
-                  display: "grid",
-                  gap: "0.75rem",
-                  alignContent: "start",
-                }}
-              >
-                <div>
-                  <h2 style={{ margin: 0, fontSize: "1.1rem" }}>{plan.label}</h2>
-                  <p style={{ margin: "0.35rem 0 0", color: "#61666c" }}>
-                    {plan.price > 0
-                      ? `${formatPrice(plan.price, currency)} every 30 days`
-                      : "No recurring charge"}
-                  </p>
-                </div>
-                <p style={{ margin: 0, minHeight: "2.5rem", color: "#373b3f" }}>
-                  {plan.credits > 0
-                    ? `${plan.credits.toLocaleString()} credits after each confirmed billing cycle`
-                    : "Free access with no billing approval"}
-                </p>
-                <Form method="post">
-                  <input type="hidden" name="planKey" value={plan.key} />
-                  <button
-                    type="submit"
-                    disabled={isDisabled}
-                    style={{
-                      width: "100%",
-                      minHeight: 40,
-                      border: 0,
-                      borderRadius: 6,
-                      padding: "0.6rem 0.8rem",
-                      color: isDisabled ? "#70757a" : "#ffffff",
-                      background: isDisabled ? "#e8eaec" : "#17191c",
-                      fontWeight: 700,
-                      cursor: isDisabled ? "default" : "pointer",
-                    }}
-                  >
-                    {isReconnectPlan
-                      ? "Reconnect"
-                      : isActive
-                        ? "Current plan"
-                        : isConfigured
-                          ? "Select plan"
-                          : "Not configured"}
-                  </button>
-                </Form>
-              </section>
-            );
-          })}
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 2v3M17 2v3M3 9h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2Z" />
+      <path d="m9 15 2 2 4-4" />
+    </svg>
+  );
+}
+
+export default function BillingPage() {
+  const data = useLoaderData<typeof loader>();
+  const actionData = useActionData<{ error?: string }>();
+  const navigation = useNavigation();
+  const submittingPlanKey = navigation.formData?.get("planKey");
+  const isSubmitting = navigation.state === "submitting";
+  const currentEndLabel = formatDate(data.currentPeriodEnd);
+  const pendingStartLabel = formatDate(data.pendingPlanActivatesAt);
+
+  return (
+    <main className={styles.page}>
+      <header className={styles.header}>
+        <div>
+          <h1>Choose your Lystr plan</h1>
+          <p>
+            Paid plans are billed every <strong>30 days</strong> through
+            Shopify.
+          </p>
         </div>
-      </div>
-    </div>
+        <details className={styles.infoDetails}>
+          <summary className={styles.infoButton}>
+            <span aria-hidden="true">i</span>
+            How billing works
+          </summary>
+          <div className={styles.infoPanel}>
+            Shopify confirms every paid plan. Reconnecting an existing
+            paid-through plan creates no new charge or credit reward.
+          </div>
+        </details>
+      </header>
+
+      {data.remainingPaidAccess && data.currentPlanName ? (
+        <section
+          className={styles.transitionSummary}
+          aria-label="Current billing state"
+        >
+          <div>
+            <span>Current plan</span>
+            <strong>{data.currentPlanName}</strong>
+          </div>
+          <div>
+            <span>Active until</span>
+            <strong>{currentEndLabel ?? "Current billing-period end"}</strong>
+          </div>
+          {data.pendingPlanName ? (
+            <div>
+              <span>Next plan</span>
+              <strong>{data.pendingPlanName}</strong>
+              <small>
+                Starts{" "}
+                {pendingStartLabel
+                  ? `after ${pendingStartLabel}`
+                  : "after the current period"}
+              </small>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {actionData?.error ? (
+        <p className={styles.error} role="alert">
+          {actionData.error}
+        </p>
+      ) : null}
+
+      <section className={styles.planGrid} aria-label="Lystr billing plans">
+        {data.plans.map((plan) => {
+          const isCurrent = data.currentPlanKey === plan.key;
+          const isPending = data.pendingPlanKey === plan.key;
+          const reconnectSamePlan =
+            data.isReconnectMode && data.remainingPaidAccess && isCurrent;
+          const currentWithoutReconnect =
+            isCurrent && !data.isReconnectMode && data.remainingPaidAccess;
+          const switchAfterPeriod = data.remainingPaidAccess && !isCurrent;
+          const requiresNewCharge =
+            plan.key !== "free" && !reconnectSamePlan && !switchAfterPeriod;
+          const isDisabled =
+            isSubmitting ||
+            currentWithoutReconnect ||
+            (requiresNewCharge && !plan.isConfigured) ||
+            (switchAfterPeriod && plan.key !== "free" && !plan.isConfigured);
+          const buttonLabel =
+            isSubmitting && submittingPlanKey === plan.key
+              ? "Processing..."
+              : reconnectSamePlan
+                ? "Reconnect"
+                : currentWithoutReconnect
+                  ? "Current plan"
+                  : switchAfterPeriod
+                    ? "Switch after current period"
+                    : plan.key === "free"
+                      ? "Select plan"
+                      : !plan.isConfigured
+                        ? "Not configured"
+                        : "Approve payment";
+
+          return (
+            <article
+              className={`${styles.planCard} ${isCurrent ? styles.currentCard : ""}`}
+              key={plan.key}
+            >
+              <div className={styles.cardTopline}>
+                <span className={styles.planIcon}>
+                  <PlanIcon planKey={plan.key} />
+                </span>
+                {plan.key === "basic" ? (
+                  <span className={styles.recommended}>Recommended</span>
+                ) : null}
+              </div>
+              <div>
+                <h2>{plan.label}</h2>
+                <p className={styles.price}>
+                  {plan.key === "free"
+                    ? "No recurring charge"
+                    : plan.price > 0
+                      ? `${formatPrice(plan.price, data.currency)} every 30 days`
+                      : "Billing price not configured"}
+                </p>
+              </div>
+              <div className={styles.divider} />
+              <p className={styles.credits}>
+                {plan.credits > 0
+                  ? `${plan.credits.toLocaleString()} credits after each confirmed billing cycle`
+                  : "Free access with no billing approval"}
+              </p>
+              {plan.key !== "free" ? (
+                <div className={styles.expiryNote}>
+                  <CalendarIcon />
+                  <span>Credits expire after 12 months</span>
+                </div>
+              ) : (
+                <div className={styles.expirySpacer} />
+              )}
+              <p className={styles.pendingNote}>
+                {isPending
+                  ? data.pendingPlanStatus === "APPROVED"
+                    ? "Approved for the next billing period"
+                    : "Scheduled for the next billing period"
+                  : "\u00a0"}
+              </p>
+              <Form method="post">
+                <input type="hidden" name="planKey" value={plan.key} />
+                <button
+                  className={`${styles.planButton} ${reconnectSamePlan ? styles.reconnectButton : ""}`}
+                  disabled={isDisabled}
+                  type="submit"
+                >
+                  {buttonLabel}
+                </button>
+              </Form>
+            </article>
+          );
+        })}
+      </section>
+
+      <aside className={styles.creditNotice}>
+        <span className={styles.noticeIcon}>
+          <CalendarIcon />
+        </span>
+        <div>
+          <strong>
+            Credits expire after 12 months from the date they are earned.
+          </strong>
+          <p>
+            When you use credits, they are deducted from the oldest credits
+            first.
+          </p>
+        </div>
+      </aside>
+    </main>
   );
 }
