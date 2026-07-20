@@ -55,10 +55,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const connectorStatus = await getLystrConnectorStatus({
     shopDomain: session.shop,
   }).catch(() => null);
+  const connectorCancellationPending = Boolean(
+    connectorStatus?.connector.accessAllowed &&
+      connectorStatus.connector.status.trim().toUpperCase() === "CANCELED"
+  );
 
   return {
     activePlanKey:
       currentSubscription?.planKey ?? connectorStatus?.connector.shopifyPlanKey ?? null,
+    isCancellationPending:
+      currentSubscription?.status?.trim().toUpperCase() === "CANCELLED" ||
+      connectorCancellationPending,
     currency: config.currency,
     plans: PLAN_KEYS.map((planKey) => {
       const isFree = planKey === "free";
@@ -157,7 +164,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function BillingPage() {
-  const { activePlanKey, currency, plans } = useLoaderData<typeof loader>();
+  const { activePlanKey, currency, isCancellationPending, plans } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<{ error?: string }>();
 
   return (
@@ -202,7 +210,9 @@ export default function BillingPage() {
         >
           {plans.map((plan) => {
             const isActive = activePlanKey === plan.key;
+            const isReconnectPlan = isActive && isCancellationPending;
             const isConfigured = plan.key === "free" || plan.price > 0;
+            const isDisabled = (isActive && !isReconnectPlan) || !isConfigured;
 
             return (
               <section
@@ -234,20 +244,26 @@ export default function BillingPage() {
                   <input type="hidden" name="planKey" value={plan.key} />
                   <button
                     type="submit"
-                    disabled={isActive || !isConfigured}
+                    disabled={isDisabled}
                     style={{
                       width: "100%",
                       minHeight: 40,
                       border: 0,
                       borderRadius: 6,
                       padding: "0.6rem 0.8rem",
-                      color: isActive || !isConfigured ? "#70757a" : "#ffffff",
-                      background: isActive || !isConfigured ? "#e8eaec" : "#17191c",
+                      color: isDisabled ? "#70757a" : "#ffffff",
+                      background: isDisabled ? "#e8eaec" : "#17191c",
                       fontWeight: 700,
-                      cursor: isActive || !isConfigured ? "default" : "pointer",
+                      cursor: isDisabled ? "default" : "pointer",
                     }}
                   >
-                    {isActive ? "Current plan" : isConfigured ? "Select plan" : "Not configured"}
+                    {isReconnectPlan
+                      ? "Reconnect"
+                      : isActive
+                        ? "Current plan"
+                        : isConfigured
+                          ? "Select plan"
+                          : "Not configured"}
                   </button>
                 </Form>
               </section>
