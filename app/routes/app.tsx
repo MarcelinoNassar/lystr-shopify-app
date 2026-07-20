@@ -105,6 +105,7 @@ export default function App() {
       >
         <s-app-nav>
           <s-link href="/app">Connect Store</s-link>
+          <s-link href="/app/billing">Billing</s-link>
         </s-app-nav>
         <main
           className="lystr-app-main"

@@ -5,6 +5,7 @@ export type LystrConnectorConfig = {
   currency: string;
   migrationBillingStartsAt: string;
   planCredits: Record<string, number>;
+  planPrices: Record<string, number>;
   planName: string;
 };
 
@@ -26,6 +27,7 @@ export type LystrConnectorStatus = {
   shopifyPlanHandle?: string | null;
   shopifyPlanKey?: string | null;
   shopifyPlanName?: string | null;
+  shopifyBillingSource?: string | null;
   shopifySubscriptionId?: string | null;
   shopifySubscriptionStatus?: string | null;
   status: string;
@@ -40,6 +42,7 @@ export type LystrStoreSummary = {
 };
 
 export type ShopifySubscriptionForLystr = {
+  billingSource?: "app_pricing" | "manual" | null;
   id?: string | null;
   name?: string | null;
   planKey?: string | null;
@@ -164,6 +167,20 @@ export async function syncLystrConnectorBilling(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function syncLystrCreditTopUp(input: {
+  shopDomain: string;
+  shopifyPurchaseId: string;
+  shopifyWebhookId?: string | null;
+}) {
+  return requestLystr<{ result?: unknown }>(
+    "/api/shopify-connector/billing/top-up-sync",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  );
 }
 
 export async function markLystrConnectorUninstalled(input: {

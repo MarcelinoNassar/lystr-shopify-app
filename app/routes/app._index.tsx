@@ -23,8 +23,10 @@ import {
   type ShopifySubscriptionForLystr,
 } from "../lystr.server";
 import {
+  cancelCurrentAppPricingSubscription,
   getAppPricingPlanSelectionUrl,
-  getCurrentAppPricingSubscription,
+  getCurrentShopifyBillingSubscription,
+  isShopifyManualBillingEnabled,
 } from "../shopify-app-pricing.server";
 
 const LYSTR_STORES_URL = "https://lystr.ai/stores";
@@ -1035,7 +1037,7 @@ function LoadingSpinner() {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, redirect, session } = await authenticate.admin(request);
 
   const store = await prisma.store.findFirst({
     where: { shopDomain: session.shop },
@@ -1047,12 +1049,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.warn("Failed to fetch Lystr connector status.", error);
     return null;
   });
-  const activeSubscription = await getCurrentAppPricingSubscription({
+  const activeSubscription = await getCurrentShopifyBillingSubscription({
     admin,
     config: configResponse.config,
     request,
     shopDomain: session.shop,
   });
+
+  if (
+    new URL(request.url).searchParams.get("cancel_legacy") === "1" &&
+    activeSubscription?.billingSource === "manual"
+  ) {
+    try {
+      await cancelCurrentAppPricingSubscription({ admin });
+      throw redirect("/app", { target: "_top" });
+    } catch (error) {
+      if (error instanceof Response) {
+        throw error;
+      }
+
+      console.error("Failed to cancel the replaced App Pricing subscription.", error);
+      throw new Response(
+        "Your new plan is active, but Shopify has not confirmed cancellation of the previous App Pricing plan. Reload to retry before using Lystr.",
+        { status: 502 }
+      );
+    }
+  }
   let connector: LystrConnectorStatus | null =
     statusResponse?.connector ?? null;
   let connected = Boolean(store?.connected && store.accessToken && store.shopDomain);
@@ -1083,7 +1105,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const connectorHasAttachedStore = Boolean(connector?.storeId);
 
   return {
-    appPricingUrl: getAppPricingPlanSelectionUrl(session.shop),
+    appPricingUrl: isShopifyManualBillingEnabled()
+      ? "/app/billing"
+      : getAppPricingPlanSelectionUrl(session.shop),
     config: configResponse.config,
     connected: Boolean(
       connected ||
@@ -1141,7 +1165,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       apiKey,
       shopDomain: session.shop,
     });
-    const activeSubscription = await getCurrentAppPricingSubscription({
+    const activeSubscription = await getCurrentShopifyBillingSubscription({
       admin,
       config: prepared.config,
       request,
@@ -1174,9 +1198,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const errorMessage = getErrorMessage(error);
 
     if (isBillingApprovalRequiredMessage(errorMessage)) {
-      return redirect(getAppPricingPlanSelectionUrl(session.shop), {
+      return redirect(
+        isShopifyManualBillingEnabled()
+          ? "/app/billing"
+          : getAppPricingPlanSelectionUrl(session.shop),
+        {
         target: "_top",
-      });
+        }
+      );
     }
 
     console.error("Failed to connect Lystr store from Shopify app.", error);
@@ -1187,9 +1216,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  return redirect(getAppPricingPlanSelectionUrl(session.shop), {
+  return redirect(
+    isShopifyManualBillingEnabled()
+      ? "/app/billing"
+      : getAppPricingPlanSelectionUrl(session.shop),
+    {
     target: "_top",
-  });
+    }
+  );
 };
 
 export default function Index() {
@@ -1236,7 +1270,7 @@ export default function Index() {
       : minPaidPlanCredits === 1
         ? "1 Lystr credit"
         : `${minPaidPlanCredits || config.creditsPerSuccessfulPayment} Lystr credits`;
-  const pricingFeatureTitle = "Shopify App Pricing";
+  const pricingFeatureTitle = "Shopify billing";
 
   return (
     <div className={styles.page} style={criticalPageStyle}>

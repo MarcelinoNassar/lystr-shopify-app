@@ -4,7 +4,7 @@ import {
   getLystrConnectorConfig,
   syncLystrConnectorBilling,
 } from "../lystr.server";
-import { getCurrentAppPricingSubscription } from "../shopify-app-pricing.server";
+import { getCurrentShopifyBillingSubscription } from "../shopify-app-pricing.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, shop, topic, webhookId } = await authenticate.webhook(request);
@@ -17,7 +17,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     const configResponse = await getLystrConnectorConfig();
-    const activeSubscription = await getCurrentAppPricingSubscription({
+    const activeSubscription = await getCurrentShopifyBillingSubscription({
       admin,
       config: configResponse.config,
       request,

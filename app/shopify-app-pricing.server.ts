@@ -1,8 +1,11 @@
 import type { LystrConnectorConfig, ShopifySubscriptionForLystr } from "./lystr.server";
 import {
+  APP_PRICING_PLAN_KEYS,
   getAppPricingPlanDefinitionByHandle,
+  getAppPricingPlanDefinition,
   isAcceptedAppPricingPlanHandle,
   isFreeAppPricingPlanHandle,
+  type AppPricingPlanKey,
 } from "./shopify-app-pricing-plans.server";
 
 type AdminGraphqlClient = {
@@ -41,12 +44,118 @@ type PartnerSubscriptionItem = {
 const DEFAULT_APP_HANDLE = "lystr-connect";
 const PARTNER_API_VERSION = "2026-07";
 
+const MANUAL_SUBSCRIPTION_QUERY = `
+  #graphql
+  query LystrManualBillingSubscription {
+    currentAppInstallation {
+      activeSubscriptions {
+        id
+        name
+        status
+        test
+        trialDays
+        createdAt
+        currentPeriodEnd
+        lineItems {
+          id
+          plan {
+            pricingDetails {
+              __typename
+              ... on AppRecurringPricing {
+                price {
+                  amount
+                  currencyCode
+                }
+                interval
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const CREATE_MANUAL_SUBSCRIPTION_MUTATION = `
+  #graphql
+  mutation LystrCreateManualSubscription(
+    $name: String!
+    $returnUrl: URL!
+    $lineItems: [AppSubscriptionLineItemInput!]!
+    $replacementBehavior: AppSubscriptionReplacementBehavior!
+    $test: Boolean
+  ) {
+    appSubscriptionCreate(
+      name: $name
+      returnUrl: $returnUrl
+      lineItems: $lineItems
+      replacementBehavior: $replacementBehavior
+      test: $test
+    ) {
+      appSubscription {
+        id
+        name
+        status
+      }
+      confirmationUrl
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const CANCEL_MANUAL_SUBSCRIPTION_MUTATION = `
+  #graphql
+  mutation LystrCancelManualSubscription($id: ID!) {
+    appSubscriptionCancel(id: $id, prorate: false) {
+      appSubscription {
+        id
+        status
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const PARTNER_CANCEL_SUBSCRIPTION_MUTATION = `
+  mutation LystrCancelAppPricingSubscription(
+    $appId: ID!
+    $shopId: ID!
+    $prorate: Boolean!
+    $skipFinalUsageCharge: Boolean!
+    $deferCancellation: Boolean!
+  ) {
+    appSubscriptionCancel(
+      appId: $appId
+      shopId: $shopId
+      prorate: $prorate
+      skipFinalUsageCharge: $skipFinalUsageCharge
+      deferCancellation: $deferCancellation
+    ) {
+      userErrors {
+        message
+      }
+    }
+  }
+`;
+
 function normalizeHandle(value: string | null | undefined) {
   return value?.trim().toLowerCase() || "";
 }
 
 export function getShopifyAppHandle() {
   return process.env.SHOPIFY_APP_HANDLE?.trim() || DEFAULT_APP_HANDLE;
+}
+
+export function isShopifyManualBillingEnabled() {
+  return (
+    process.env.SHOPIFY_MANUAL_BILLING_ENABLED?.trim().toLowerCase() === "true"
+  );
 }
 
 export function getPlanHandleFromRequest(request: Request) {
@@ -225,6 +334,7 @@ function getLineItemPrice(
 }
 
 function subscriptionFromPlanHandle({
+  billingSource = "app_pricing",
   config,
   currentPeriodEnd,
   id,
@@ -232,6 +342,7 @@ function subscriptionFromPlanHandle({
   shopDomain,
   startedAt,
 }: {
+  billingSource?: "app_pricing" | "manual";
   config: LystrConnectorConfig;
   currentPeriodEnd?: string | null;
   id?: string | null;
@@ -242,6 +353,7 @@ function subscriptionFromPlanHandle({
   const planDefinition = getAppPricingPlanDefinitionByHandle(planHandle);
 
   return {
+    billingSource,
     id: id || `shopify-app-pricing:${shopDomain}:${planHandle}`,
     name: planDefinition?.label ?? planHandle,
     planKey: planDefinition?.key ?? null,
@@ -289,6 +401,7 @@ function subscriptionFromPartnerActiveSubscription({
   }
 
   return {
+    billingSource: "app_pricing" as const,
     id:
       subscription.legacySubscriptionId ||
       `shopify-app-pricing:${shopDomain}:${planHandle}`,
@@ -354,4 +467,317 @@ export async function getCurrentAppPricingSubscription({
   }
 
   return null;
+}
+
+function getManualPlanKey(name: string | null | undefined) {
+  const normalizedName = normalizeHandle(name);
+
+  return (
+    [
+      APP_PRICING_PLAN_KEYS.premium,
+      APP_PRICING_PLAN_KEYS.pro,
+      APP_PRICING_PLAN_KEYS.basic,
+    ] as AppPricingPlanKey[]
+  ).find((planKey) => normalizedName.includes(planKey)) ?? null;
+}
+
+async function getCurrentManualBillingSubscription({
+  admin,
+}: {
+  admin: AdminGraphqlClient;
+}) {
+  const response = await admin.graphql(MANUAL_SUBSCRIPTION_QUERY);
+  const json = (await response.json()) as {
+    data?: {
+      currentAppInstallation?: {
+        activeSubscriptions?: Array<{
+          id?: string | null;
+          name?: string | null;
+          status?: string | null;
+          test?: boolean | null;
+          trialDays?: number | null;
+          createdAt?: string | null;
+          currentPeriodEnd?: string | null;
+          lineItems?: Array<{
+            id?: string | null;
+            plan?: {
+              pricingDetails?: {
+                price?: {
+                  amount?: number | string | null;
+                  currencyCode?: string | null;
+                } | null;
+              } | null;
+            } | null;
+          }> | null;
+        }> | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string | null }>;
+  };
+
+  if (json.errors?.length) {
+    throw new Error(json.errors[0]?.message || "Manual billing query failed.");
+  }
+
+  const activeSubscription =
+    json.data?.currentAppInstallation?.activeSubscriptions?.find(
+      (subscription) =>
+        subscription.status?.trim().toUpperCase() === "ACTIVE"
+    ) ?? null;
+  const planKey = getManualPlanKey(activeSubscription?.name);
+
+  if (!activeSubscription?.id || !planKey) {
+    return null;
+  }
+
+  return {
+    billingSource: "manual" as const,
+    id: activeSubscription.id,
+    name: activeSubscription.name ?? getAppPricingPlanDefinition(planKey)?.label,
+    planKey,
+    status: activeSubscription.status ?? "ACTIVE",
+    test: activeSubscription.test ?? false,
+    createdAt: activeSubscription.createdAt ?? null,
+    currentPeriodEnd: activeSubscription.currentPeriodEnd ?? null,
+    lineItems:
+      activeSubscription.lineItems?.map((lineItem) => ({
+        id: lineItem.id ?? null,
+        plan: {
+          pricingDetails: {
+            price: {
+              amount: lineItem.plan?.pricingDetails?.price?.amount ?? null,
+              currencyCode:
+                lineItem.plan?.pricingDetails?.price?.currencyCode ?? null,
+            },
+          },
+        },
+      })) ?? [],
+  } satisfies ShopifySubscriptionForLystr;
+}
+
+export async function getCurrentShopifyBillingSubscription(args: {
+  admin: AdminGraphqlClient;
+  config: LystrConnectorConfig;
+  request: Request;
+  shopDomain: string;
+  throwOnPartnerApiError?: boolean;
+}) {
+  if (isShopifyManualBillingEnabled()) {
+    try {
+      const manualSubscription = await getCurrentManualBillingSubscription({
+        admin: args.admin,
+      });
+
+      if (manualSubscription) {
+        return manualSubscription;
+      }
+    } catch (error) {
+      console.warn("Failed to query Shopify Manual Pricing subscription.", error);
+    }
+  }
+
+  return getCurrentAppPricingSubscription(args);
+}
+
+export function getFreeShopifySubscription(
+  shopDomain: string,
+  config: LystrConnectorConfig
+) {
+  const definition = getAppPricingPlanDefinition(APP_PRICING_PLAN_KEYS.free);
+  const handle = definition?.handles[0] ?? "free-plan";
+
+  return subscriptionFromPlanHandle({
+    billingSource: "manual",
+    config,
+    planHandle: handle,
+    shopDomain,
+  });
+}
+
+function getManualBillingBaseUrl() {
+  const configuredUrl = process.env.SHOPIFY_APP_URL?.trim();
+
+  if (!configuredUrl) {
+    throw new Error("SHOPIFY_APP_URL is not configured.");
+  }
+
+  const url = new URL(configuredUrl);
+
+  if (url.protocol !== "https:" && url.hostname !== "localhost") {
+    throw new Error("SHOPIFY_APP_URL must use HTTPS.");
+  }
+
+  return url;
+}
+
+export function getManualBillingReturnUrl({
+  cancelLegacySubscription,
+  planKey,
+}: {
+  cancelLegacySubscription: boolean;
+  planKey: AppPricingPlanKey;
+}) {
+  const url = new URL("/app", getManualBillingBaseUrl());
+  url.searchParams.set("billing_return", "1");
+  url.searchParams.set("requested_plan", planKey);
+
+  if (cancelLegacySubscription) {
+    url.searchParams.set("cancel_legacy", "1");
+  }
+
+  return url.toString();
+}
+
+export async function createManualBillingSubscription({
+  admin,
+  config,
+  planKey,
+  returnUrl,
+}: {
+  admin: AdminGraphqlClient;
+  config: LystrConnectorConfig;
+  planKey: AppPricingPlanKey;
+  returnUrl: string;
+}) {
+  if (planKey === APP_PRICING_PLAN_KEYS.free) {
+    throw new Error("The free plan does not create a Shopify charge.");
+  }
+
+  const definition = getAppPricingPlanDefinition(planKey);
+  const price = Number(config.planPrices?.[planKey]);
+
+  if (!definition || !Number.isFinite(price) || price <= 0) {
+    throw new Error(`${definition?.label ?? planKey} Manual Pricing is not configured.`);
+  }
+
+  const response = await admin.graphql(CREATE_MANUAL_SUBSCRIPTION_MUTATION, {
+    variables: {
+      name: `Lystr ${definition.label}`,
+      returnUrl,
+      lineItems: [
+        {
+          plan: {
+            appRecurringPricingDetails: {
+              price: {
+                amount: Number(price.toFixed(2)),
+                currencyCode: config.currency.toUpperCase(),
+              },
+              interval: "EVERY_30_DAYS",
+            },
+          },
+        },
+      ],
+      replacementBehavior: "APPLY_IMMEDIATELY",
+      test: process.env.SHOPIFY_BILLING_TEST_MODE?.trim().toLowerCase() === "true",
+    },
+  });
+  const json = (await response.json()) as {
+    data?: {
+      appSubscriptionCreate?: {
+        confirmationUrl?: string | null;
+        userErrors?: Array<{ message?: string | null }> | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string | null }>;
+  };
+  const errorMessage =
+    json.errors?.[0]?.message ||
+    json.data?.appSubscriptionCreate?.userErrors
+      ?.map((error) => error.message?.trim())
+      .find(Boolean);
+  const confirmationUrl =
+    json.data?.appSubscriptionCreate?.confirmationUrl?.trim() ?? "";
+
+  if (errorMessage || !confirmationUrl) {
+    throw new Error(errorMessage || "Shopify did not return a subscription approval URL.");
+  }
+
+  return confirmationUrl;
+}
+
+export async function cancelManualBillingSubscription({
+  admin,
+  subscriptionId,
+}: {
+  admin: AdminGraphqlClient;
+  subscriptionId: string;
+}) {
+  const response = await admin.graphql(CANCEL_MANUAL_SUBSCRIPTION_MUTATION, {
+    variables: { id: subscriptionId },
+  });
+  const json = (await response.json()) as {
+    data?: {
+      appSubscriptionCancel?: {
+        userErrors?: Array<{ message?: string | null }> | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string | null }>;
+  };
+  const errorMessage =
+    json.errors?.[0]?.message ||
+    json.data?.appSubscriptionCancel?.userErrors
+      ?.map((error) => error.message?.trim())
+      .find(Boolean);
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+}
+
+export async function cancelCurrentAppPricingSubscription({
+  admin,
+}: {
+  admin: AdminGraphqlClient;
+}) {
+  const partnerConfig = getPartnerApiConfig();
+
+  if (!partnerConfig) {
+    throw new Error("Shopify Partner API credentials are not configured.");
+  }
+
+  const { appId, shopId } = await getInstalledAppAndShopGids(admin);
+  const response = await fetch(
+    `https://partners.shopify.com/${partnerConfig.organizationId}/api/${PARTNER_API_VERSION}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-shopify-access-token": partnerConfig.token,
+      },
+      body: JSON.stringify({
+        query: PARTNER_CANCEL_SUBSCRIPTION_MUTATION,
+        variables: {
+          appId,
+          shopId,
+          prorate: false,
+          skipFinalUsageCharge: false,
+          deferCancellation: false,
+        },
+      }),
+    }
+  );
+  const json = (await response.json()) as {
+    data?: {
+      appSubscriptionCancel?: {
+        userErrors?: Array<{ message?: string | null }> | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string | null }>;
+  };
+  const errorMessage =
+    json.errors?.[0]?.message ||
+    json.data?.appSubscriptionCancel?.userErrors
+      ?.map((error) => error.message?.trim())
+      .find(Boolean);
+
+  if (
+    errorMessage?.toLowerCase().includes("no active billing contract") ||
+    errorMessage?.toLowerCase().includes("no active subscription")
+  ) {
+    return;
+  }
+
+  if (!response.ok || errorMessage) {
+    throw new Error(errorMessage || "Shopify could not cancel the App Pricing subscription.");
+  }
 }
