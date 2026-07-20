@@ -163,17 +163,6 @@ const criticalWarningPulseStyle = {
   flex: "0 0 auto",
 } satisfies CSSProperties;
 
-const criticalCanceledStatusPillStyle = {
-  ...criticalStatusPillStyle,
-  background:
-    "linear-gradient(90deg, rgba(245, 158, 11, 0.13), rgba(217, 119, 6, 0.19))",
-} satisfies CSSProperties;
-
-const criticalCanceledStatusPillIconStyle = {
-  ...criticalStatusPillIconStyle,
-  color: "#d97706",
-} satisfies CSSProperties;
-
 const criticalRedirectButtonStyle = {
   display: "inline-flex",
   alignItems: "center",
@@ -1082,12 +1071,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let connected = Boolean(store?.connected && store.accessToken && store.shopDomain);
   const canFinalizeWithCurrentSubscription =
     activeSubscription && canUseCurrentShopifySubscription(activeSubscription);
+  const shouldFinalizeConnection = Boolean(
+    isBillingReturn ||
+      (connector?.connectionPending && !connector.reconnectRequired),
+  );
 
   if (
     session.accessToken &&
     canFinalizeWithCurrentSubscription &&
-    (!connector?.reconnectRequired || isBillingReturn) &&
-    (store?.apiKey || connector?.connectionPending || connector?.storeId)
+    shouldFinalizeConnection &&
+    (store?.apiKey || connector?.connectionPending)
   ) {
     try {
       const connectResult = await connectLystrStore({
@@ -1255,10 +1248,7 @@ export default function Index() {
     connector?.accessAllowed !== true;
   const isConnected =
     !isBillingIncomplete && (connected || actionData?.success === true);
-  const isCancellationPending = isConnectorCancellationPending(connector);
-  const connectedStatusMessage =
-    statusMessage || "Store connected and ready to use.";
-  const connectedBadgeContent = connectedStatusMessage;
+  const connectedBadgeContent = "Active Shopify connector subscription.";
   const billingFeatureTitle = "Shopify approval";
   const paidPlanCreditValues = Object.values(config.planCredits ?? {}).filter(
     (value): value is number => Number.isFinite(value) && value > 0
@@ -1290,22 +1280,12 @@ export default function Index() {
               style={criticalStatusTitleStyle}
             >
               <span
-                className={
-                  isCancellationPending
-                    ? `${styles.statusPulseWarning} lystr-status-warning-dot`
-                    : `${styles.statusIcon} ${styles.statusIconSuccess} lystr-status-success-dot`
-                }
-                style={
-                  isCancellationPending
-                    ? criticalWarningPulseStyle
-                    : criticalStatusIconSuccessStyle
-                }
+                className={`${styles.statusIcon} ${styles.statusIconSuccess} lystr-status-success-dot`}
+                style={criticalStatusIconSuccessStyle}
                 aria-hidden="true"
               />
               <h1 style={criticalStatusHeadingStyle}>
-                {isCancellationPending
-                  ? "Store connected until the plan ends."
-                  : "Store connected successfully to Lystr Connect."}
+                Store connected successfully to Lystr Connect.
               </h1>
             </div>
             <span
@@ -1315,19 +1295,11 @@ export default function Index() {
             />
             <div
               className={`${styles.statusPill} lystr-status-pill`}
-              style={
-                isCancellationPending
-                  ? criticalCanceledStatusPillStyle
-                  : criticalStatusPillStyle
-              }
+              style={criticalStatusPillStyle}
             >
               <span
                 className={styles.statusPillIcon}
-                style={
-                  isCancellationPending
-                    ? criticalCanceledStatusPillIconStyle
-                    : criticalStatusPillIconStyle
-                }
+                style={criticalStatusPillIconStyle}
               >
                 <CalendarIcon />
               </span>
