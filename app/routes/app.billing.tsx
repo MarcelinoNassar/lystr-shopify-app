@@ -194,10 +194,10 @@ async function loadBillingState({
       where: { shopDomain },
     });
 
-    if (accessToken && localStore) {
+    if (accessToken && connector?.storeId) {
       const result = await connectLystrStore({
         accessToken,
-        apiKey: localStore.apiKey ?? undefined,
+        apiKey: localStore?.apiKey ?? undefined,
         shopDomain,
         shopifySubscription: currentSubscription,
       }).catch(() => null);
@@ -323,7 +323,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shopDomain: session.shop },
     });
 
-    if (!session.accessToken || !localStore) {
+    if (!session.accessToken || !connector?.storeId) {
       throw new Error("The Shopify store connection could not be verified.");
     }
 
@@ -365,7 +365,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (pendingStatus === "ACTIVE" || pendingStatus === "ACCEPTED") {
         await connectLystrStore({
           accessToken: session.accessToken,
-          apiKey: localStore.apiKey ?? undefined,
+          apiKey: localStore?.apiKey ?? undefined,
           shopDomain: session.shop,
           shopifySubscription: pendingSubscription,
         });
@@ -398,7 +398,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       await connectLystrStore({
         accessToken: session.accessToken,
-        apiKey: localStore.apiKey ?? undefined,
+        apiKey: localStore?.apiKey ?? undefined,
         shopDomain: session.shop,
         shopifySubscription: currentSubscription,
       });
@@ -428,7 +428,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
         await connectLystrStore({
           accessToken: session.accessToken,
-          apiKey: localStore.apiKey ?? undefined,
+          apiKey: localStore?.apiKey ?? undefined,
           shopDomain: session.shop,
           shopifySubscription: {
             ...currentSubscription,
@@ -485,7 +485,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       await connectLystrStore({
         accessToken: session.accessToken,
-        apiKey: localStore.apiKey ?? undefined,
+        apiKey: localStore?.apiKey ?? undefined,
         shopDomain: session.shop,
         shopifySubscription: currentSubscription,
       });
@@ -500,7 +500,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       await connectLystrStore({
         accessToken: session.accessToken,
-        apiKey: localStore.apiKey ?? undefined,
+        apiKey: localStore?.apiKey ?? undefined,
         shopDomain: session.shop,
         shopifySubscription: getFreeShopifySubscription(session.shop, config),
       });
